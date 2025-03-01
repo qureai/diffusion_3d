@@ -94,7 +94,7 @@ class CTRATEDataset(CacheDataset):
         study_uids = self.dataset.StudyUID.drop_duplicates()
         train_study_uids, valid_study_uids = train_test_split(
             study_uids,
-            train_size=0.9,
+            train_size=0.95,
             random_state=42,
         )
         train = self.dataset[self.dataset.StudyUID.isin(train_study_uids)]
