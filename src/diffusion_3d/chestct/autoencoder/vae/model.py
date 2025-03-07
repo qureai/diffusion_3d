@@ -1,3 +1,5 @@
+import math
+
 import lightning as L
 import numpy as np
 import torch
@@ -10,101 +12,21 @@ from munch import Munch
 from torch import nn
 from torch.nn import L1Loss, MSELoss
 from torch.nn import functional as F
-from torch.nn.utils import spectral_norm
 from vision_architectures.layers.embeddings import AbsolutePositionEmbeddings3D
 from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoder, SwinV23DModel
 
-
-class UnembeddingLayer(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-
-        unembedding_channels = config.in_channels // 2
-
-        self.upsample = nn.Sequential(
-            nn.ConvTranspose3d(config.in_channels, unembedding_channels, kernel_size=4, stride=2, padding=1),
-            nn.GroupNorm(3, unembedding_channels),  # More stable than InstanceNorm
-            nn.SiLU(inplace=True),  # SiLU (Swish) activation for smoother gradients
-        )
-
-        # Frequency separation block
-        # Low-frequency path with standard convolution
-        self.low_freq_branch = nn.Sequential(
-            spectral_norm(nn.Conv3d(unembedding_channels, unembedding_channels, kernel_size=5, padding=2, stride=1)),
-            nn.GroupNorm(3, unembedding_channels),
-            nn.SiLU(inplace=True),
-        )
-        # High-frequency path with depthwise separable convolution for efficiency
-        self.high_freq_branch = nn.Sequential(
-            spectral_norm(nn.Conv3d(unembedding_channels, unembedding_channels, kernel_size=1, padding=0, stride=1)),
-            nn.GroupNorm(3, unembedding_channels),
-            nn.SiLU(inplace=True),
-            # Depthwise convolution for spatial feature extraction
-            spectral_norm(
-                nn.Conv3d(
-                    unembedding_channels,
-                    unembedding_channels,
-                    kernel_size=3,
-                    padding=1,
-                    stride=1,
-                    groups=unembedding_channels,
-                )
-            ),
-            nn.GroupNorm(3, unembedding_channels),
-            nn.SiLU(inplace=True),
-            # Pointwise convolution for feature mixing
-            spectral_norm(nn.Conv3d(unembedding_channels, unembedding_channels, kernel_size=1, padding=0, stride=1)),
-        )
-        # Adaptive frequency gating mechanism
-        self.fsb_gate = nn.Sequential(
-            nn.Conv3d(unembedding_channels, unembedding_channels, kernel_size=1), nn.Sigmoid()
-        )
-
-        self.finalize = nn.Sequential(
-            spectral_norm(nn.Conv3d(unembedding_channels, config.out_channels, kernel_size=3, padding=1)),
-            nn.Tanh(),
-        )
-
-    def forward(self, x):
-        # x: (b, 2d1, z, y, x)
-        x = self.upsample(x)
-        # (b, d1, 2z, 2y, 2x)
-
-        low_freq = self.low_freq_branch(x)
-        high_freq = self.high_freq_branch(x)
-        gate = self.fsb_gate(x)
-        x = low_freq + high_freq * gate
-        # (b, d1, 2z, 2y, 2x)
-
-        x = self.finalize(x)
-        # (b, d2, 2z, 2y, 2x)
-
-        return x
+from diffusion_3d.chestct.autoencoder.vae.nn import AdaptiveVAE
 
 
-class AdaptiveVAE(AutoencoderKL, L.LightningModule):
+class AdaptiveVAELightning(L.LightningModule):
     def __init__(self, model_config: dict, training_config: Munch):
-        super().__init__(spatial_dims=3, latent_channels=model_config.swin.stages[-1]._out_dim)
+        super().__init__()
         self.save_hyperparameters()
 
         self.model_config = model_config
         self.training_config = training_config
 
-        self.encoder = SwinV23DModel(model_config.swin)
-
-        self.aggregator = nn.ModuleList(
-            [
-                nn.Conv3d(stage._out_dim, model_config.swin.stages[-1]._out_dim, kernel_size=1)
-                for stage in model_config.swin.stages
-            ]
-        )
-
-        if isinstance(model_config.decoder, SwinV23DConfig):
-            self.decoder = SwinV23DDecoder(model_config.decoder)
-        else:
-            self.decoder = Decoder(**model_config.decoder)
-
-        self.unembedding = UnembeddingLayer(model_config.unembedding)
+        self.autoencoder = AdaptiveVAE(model_config, training_config.checkpointing_level)
 
         self.reconstruction_loss = L1Loss()
         self.perceptual_loss = PerceptualLoss(
@@ -113,11 +35,13 @@ class AdaptiveVAE(AutoencoderKL, L.LightningModule):
         for p in self.perceptual_loss.parameters():
             p.requires_grad = False
 
+        # self.free_bits_per_channel = training_config.get("free_bits", 0) / model_config.swin.stages[-1].out_dim
+
         self.train_losses = []
         self.val_losses = []
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
-        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=7)
+        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=5)
 
         self.train_metrics = []
         self.val_metrics = []
@@ -142,18 +66,105 @@ class AdaptiveVAE(AutoencoderKL, L.LightningModule):
     def calculate_kl_loss(self, z_mu, z_sigma):
         z_mu_squared = z_mu.pow(2)
         z_sigma_squared = z_sigma.pow(2)
-        kl_loss = 0.5 * (z_mu_squared + z_sigma_squared - torch.log(z_sigma.pow(2)) - 1 + 1e-8)
+        kl_loss: torch.Tensor = 0.5 * (z_mu_squared + z_sigma_squared - torch.log(z_sigma.pow(2) + 1e-8) - 1)
+
+        # free_bits_ratio = (kl_loss < self.free_bits_per_channel).sum() / kl_loss.numel()
+        # kl_loss = kl_loss.clamp(min=self.free_bits_per_channel)
 
         # additional plotting
         self.log_dict(
             {
                 "train_kl_step/mu": z_mu_squared.mean(),
                 "train_kl_step/sigma": z_sigma_squared.mean(),
+                # "train_kl_step/free_bits_ratio": free_bits_ratio,
             },
             sync_dist=True,
         )
 
         return kl_loss.sum(dim=1).mean()
+
+    def calculate_spectral_loss(self, mu, logvar, eps=1e-6, normalize_by_dim=True, spatial_average=True):
+        b, dim, z, y, x = mu.shape
+        num_voxels = z * y * x
+
+        # Flatten spatial dimensions
+        mu_flat = mu.reshape(b, dim, num_voxels)  # (b, dim, num_voxels)
+        logvar_flat = logvar.reshape(b, dim, num_voxels)  # (b, dim, num_voxels)
+
+        # Compute empirical covariance matrix from mu across all samples and spatial locations
+        # We'll compute this separately for each batch and average to reduce batch dependency
+        batch_cov_matrices = []
+        for i in range(b):
+            # Treat each spatial location as an independent sample (dim, num_voxels)
+            mu_batch = mu_flat[i].permute(1, 0)  # (num_voxels, dim)
+
+            # Center the data for this batch
+            mu_centered = mu_batch - mu_batch.mean(dim=0, keepdim=True)
+
+            # Scale by 1/(N-1) for unbiased estimation when sample size is large
+            cov_factor = 1.0 / max(num_voxels - 1, 1)
+            batch_cov = cov_factor * mu_centered.T @ mu_centered  # (dim, dim)
+            batch_cov_matrices.append(batch_cov)
+
+        # Average covariance matrices across batches
+        cov_mu = torch.stack(batch_cov_matrices).mean(dim=0)  # (dim, dim)
+
+        # Properly incorporate the variance from logvar
+        # First average variances per batch, then across batches
+        var_flat = torch.exp(logvar_flat)  # (b, dim, num_voxels)
+
+        # Average variance across spatial dimensions for each latent dimension and batch
+        batch_var_diags = var_flat.mean(dim=2)  # (b, dim)
+
+        # Then average across batches
+        var_diag = batch_var_diags.mean(dim=0)  # (dim,)
+
+        # Add diagonal variance to covariance matrix
+        cov_matrix = cov_mu + torch.diag(var_diag)  # (dim, dim)
+
+        # Add small epsilon to diagonal for numerical stability
+        # This is more robust than simple addition since it scales with eigenvalue magnitudes
+        diag_eps = eps * (1.0 + torch.diag(cov_matrix).abs())
+        cov_matrix = cov_matrix + torch.diag(diag_eps)
+
+        # Compute eigenvalues with robust approach
+        try:
+            eigvals = torch.linalg.eigvalsh(cov_matrix)  # (dim,)
+            # Apply safe clamping with a scaled minimum value
+            min_eig = eps * (1.0 + eigvals.abs().max().item())
+            eigvals = torch.clamp(eigvals, min=min_eig)
+        except RuntimeError:
+            # Fallback for numerical instability: add larger epsilon and retry
+            cov_matrix = cov_matrix + torch.eye(dim, device=cov_matrix.device) * (eps * 10.0)
+            eigvals = torch.linalg.eigvalsh(cov_matrix)
+            min_eig = eps * 10.0 * (1.0 + eigvals.abs().max().item())
+            eigvals = torch.clamp(eigvals, min=min_eig)
+
+        # Spectral KL loss: 0.5 * sum(λᵢ - 1 - log(λᵢ))
+        per_dim_loss = 0.5 * (eigvals - 1.0 - torch.log(eigvals + eps))
+
+        # Apply normalization based on latent dimension to ensure consistent scaling
+        if normalize_by_dim:
+            spectral_loss = per_dim_loss.sum() / dim
+        else:
+            spectral_loss = per_dim_loss.sum()
+
+        # Further scale by spatial dimensions if requested
+        # This makes the loss invariant to the number of spatial points
+        if spatial_average:
+            # Apply a scaling factor that's inversely proportional to num_voxels
+            # This keeps the loss magnitude consistent regardless of spatial resolution
+            # We use sqrt because covariance already has a quadratic relationship with sample count
+            spectral_loss = spectral_loss * (100.0 / max(math.sqrt(num_voxels), 1.0))
+
+        # Participation Ratio: (sum(λᵢ))² / sum(λᵢ²)
+        # Measures effective dimensionality of the latent representation
+        participation_ratio = (eigvals.sum() ** 2) / (eigvals.pow(2).sum() + eps)
+        scaled_participation_ratio = participation_ratio / dim
+        self.log("train_kl_step/participation_ratio", participation_ratio, sync_dist=True)
+        self.log("train_kl_step/scaled_participation_ratio", scaled_participation_ratio, sync_dist=True)
+
+        return spectral_loss
 
     def calculate_psnr(self, reconstructed, x):
         return self.psnr_metric(reconstructed, x).mean()
@@ -165,9 +176,9 @@ class AdaptiveVAE(AutoencoderKL, L.LightningModule):
         return {
             "reconstruction_loss": self.calculate_reconstruction_loss(reconstructed, x),
             "perceptual_loss": self.calculate_perceptual_loss(reconstructed, x),
-            # "tv_loss": self.calculate_tv_loss(reconstructed),
             "ms_ssim_loss": self.calculate_ms_ssim_loss(reconstructed, x),
             "kl_loss": self.calculate_kl_loss(z_mu, z_sigma),
+            # "spectral_loss": self.calculate_spectral_loss(z_mu, z_sigma),
         }
 
     def calculate_metrics(self, x, reconstructed):
@@ -176,75 +187,68 @@ class AdaptiveVAE(AutoencoderKL, L.LightningModule):
             "ms_ssim": self.calculate_ms_ssim(reconstructed, x),
         }
 
-    def process_step(self, batch, losses: list, metrics: list, prefix, batch_idx):
-        x = batch
-
-        reconstructed, decoded, adapted_encoded, encoded_mu, encoded_sigma = self(x, prefix)
-
-        # Reshape back to input shape
-        # reconstructed = F.interpolate(reconstructed, batch.shape[2:], mode="trilinear")
+    def process_step(self, x, prefix, batch_idx):
+        autoencoder_output = self(x, prefix)
+        reconstructed = autoencoder_output["reconstructed"]
+        encoded_mu = autoencoder_output["encoded_mu"]
+        encoded_sigma = autoencoder_output["encoded_sigma"]
 
         all_losses = self.calculate_basic_losses(x, reconstructed, encoded_mu, encoded_sigma)
         all_metrics = self.calculate_metrics(x, reconstructed)
 
         kl_beta = min(1, (1 + self.current_epoch) / self.training_config.kl_annealing_epochs)
         all_losses["kl_loss"] = kl_beta * all_losses["kl_loss"]
+        # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
 
         all_losses["autoencoder_loss"] = (
             self.training_config.loss_weights["reconstruction_loss"] * all_losses["reconstruction_loss"]
+            + self.training_config.loss_weights["perceptual_loss"] * all_losses["perceptual_loss"]
             + self.training_config.loss_weights["ms_ssim_loss"] * all_losses["ms_ssim_loss"]
-            # + self.training_config.loss_weights["tv_loss"] * all_losses["tv_loss"]
             + self.training_config.loss_weights["kl_loss"] * all_losses["kl_loss"]
+            # + self.training_config.loss_weights["spectral_loss"] * all_losses["spectral_loss"]
         )
 
-        if prefix == "train":
-            losses_log = {}
-            for key, value in all_losses.items():
-                losses_log[f"train_step/{key}"] = float(value)
-                losses_log[f"train_step_scaled/{key}"] = float(self.training_config.loss_weights.get(key, 1.0) * value)
-            try:
-                self.log_dict(losses_log, sync_dist=True)
-            except:
-                print(f"Error in logging losses {losses_log}")
+        # Log
+        step_log = {}
+        epoch_log = {}
 
-        losses.append({key: value.detach().cpu() for key, value in all_losses.items()})
-        metrics.append({key: value.detach().cpu() for key, value in all_metrics.items()})
+        for key, value in all_losses.items():
+            scaled_value = self.training_config.loss_weights.get(key, 1.0) * value
+            if prefix == "train":
+                step_log[f"train_step/{key}"] = float(value)
+                step_log[f"train_step_scaled/{key}"] = float(scaled_value)
+            epoch_log[f"{prefix}_epoch_loss/{key}"] = float(value)
+            epoch_log[f"{prefix}_epoch_loss_scaled/{key}"] = float(scaled_value)
+
+        for key, value in all_metrics.items():
+            epoch_log[f"{prefix}_epoch_metrics/{key}"] = float(value)
+
+        try:
+            self.log_dict(step_log, sync_dist=True, on_step=True, on_epoch=False, prog_bar=False)
+        except:
+            print(f"Error in logging steps {step_log}")
+
+        try:
+            self.log_dict(epoch_log, sync_dist=True, on_step=False, on_epoch=True, prog_bar=True)
+        except:
+            print(f"Error in logging epochs {epoch_log}")
 
         return {
             "all_losses": all_losses,
             "all_metrics": all_metrics,
             "reconstructed": reconstructed,
-            "decoded": decoded,
-            "adapted_encoded": adapted_encoded,
             "encoded_mu": encoded_mu,
             "encoded_sigma": encoded_sigma,
         }
 
-    def process_epoch(self, losses, metrics, prefix):
-        losses = {key: [d[key].item() for d in losses] for key in losses[0]}
-        losses = {key: np.mean(value).item() for key, value in losses.items()}
-        for key, loss in losses.items():
-            try:
-                self.log(f"{prefix}_epoch_loss/{key}", float(loss), sync_dist=True)
-                self.log(
-                    f"{prefix}_epoch_loss_scaled/{key}",
-                    float(self.training_config.loss_weights.get(key, 1.0) * loss),
-                    sync_dist=True,
-                )
-            except:
-                print(f"Error in logging losses {loss}, {type(loss)}")
+    # def process_epoch(self, losses, metrics, prefix):
+    #     losses = {key: [d[key].item() for d in losses] for key in losses[0]}
+    #     losses = {key: np.mean(value).item() for key, value in losses.items()}
 
-        metrics = {key: [d[key].item() for d in metrics] for key in metrics[0]}
-        metrics = {key: np.mean(value).item() for key, value in metrics.items()}
-        for key, metric in metrics.items():
-            try:
-                self.log(f"{prefix}_epoch_metrics/{key}", float(metric), sync_dist=True)
-            except:
-                print(f"Error in logging metrics {metric}, {type(metric)}")
+    #     metrics = {key: [d[key].item() for d in metrics] for key in metrics[0]}
+    #     metrics = {key: np.mean(value).item() for key, value in metrics.items()}
 
-        self.print_numbers(f"{prefix}", losses | metrics)
-
-        return loss
+    #     self.print_numbers(f"{prefix}", losses | metrics)
 
     def on_after_backward(self):
         # Log gradient info
@@ -262,20 +266,18 @@ class AdaptiveVAE(AutoencoderKL, L.LightningModule):
             print(f"Error in logging gradients {norm}, {max_abs}")
 
     def training_step(self, batch, batch_idx):
-        return self.process_step(batch["scan"], self.train_losses, self.train_metrics, "train", batch_idx)[
-            "all_losses"
-        ]["autoencoder_loss"]
+        return self.process_step(batch["image"], "train", batch_idx)["all_losses"]["autoencoder_loss"]
 
     def validation_step(self, batch, batch_idx):
-        return self.process_step(batch["scan"], self.val_losses, self.val_metrics, "val", batch_idx)
+        return self.process_step(batch["image"], "val", batch_idx)
 
-    def on_train_epoch_end(self):
-        self.process_epoch(self.train_losses, self.train_metrics, "train")
-        self.train_losses.clear()
+    # def on_train_epoch_end(self):
+    #     self.process_epoch(self.train_losses, self.train_metrics, "train")
+    #     self.train_losses.clear()
 
-    def on_validation_epoch_end(self):
-        self.process_epoch(self.val_losses, self.val_metrics, "val")
-        self.val_losses.clear()
+    # def on_validation_epoch_end(self):
+    #     self.process_epoch(self.val_losses, self.val_metrics, "val")
+    #     self.val_losses.clear()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.training_config.lr)
@@ -302,56 +304,9 @@ class AdaptiveVAE(AutoencoderKL, L.LightningModule):
             print("{} = {:.5f}".format(key.ljust(20), number))
         print()
 
-    def encode(self, x: torch.Tensor):
-        encoded, stage_outputs, _ = self.encoder(x)
-
-        latent_shape = encoded.shape[2:]
-        aggregated_latents = []
-        for i, stage_output in enumerate(stage_outputs):
-            aggregated_latents.append(self.aggregator[i](F.adaptive_avg_pool3d(stage_output, latent_shape)))
-        encoded = reduce(aggregated_latents, "s ... -> ...", "sum")
-
-        adapted = encoded
-
-        z_mu = self.quant_conv_mu(adapted)
-        z_log_var = self.quant_conv_log_sigma(adapted)
-        z_log_var = torch.clamp(z_log_var, -30.0, 20.0)
-        z_sigma = torch.exp(z_log_var / 2)
-
-        return z_mu, z_sigma
-
-    def decode(self, z: torch.Tensor):
-        z = self.post_quant_conv(z)
-        if isinstance(self.decoder, SwinV23DDecoder):
-            z = rearrange(z, "b d z y x -> b z y x d")
-            dec, _, _ = self.decoder(z)
-            dec = rearrange(dec, "b z y x d -> b d z y x")
-        else:
-            dec = self.decoder(z)
-        return dec
-
     def forward(self, x, run_type="val"):
         # x: (b, d1, z1, y1, x1)
-
-        # encoded, _, _ = self.encoder(x)
-        # decoded = self.decode(encoded)
-        # reconstructed = self.unembedding(decoded)
-        # return reconstructed, decoded, encoded, None, None
-
-        encoded_mu, encoded_sigma = self.encode(x)
-        if run_type == "train":
-            adapted_encoded = self.sampling(encoded_mu, encoded_sigma)
-        else:
-            adapted_encoded = encoded_mu
-        # (b, d2, z2, y2, x2)
-
-        decoded = self.decode(adapted_encoded)
-        # (b, d3, z3, y3, x3)
-
-        reconstructed = self.unembedding(decoded)
-        # (b, d1, z1, y1, x1)
-
-        return reconstructed, decoded, adapted_encoded, encoded_mu, encoded_sigma
+        return self.autoencoder(x, run_type)
 
     # def on_before_zero_grad(self, optimizer):
     #     """Will print all unused parameters"""
@@ -364,44 +319,15 @@ class AdaptiveVAE(AutoencoderKL, L.LightningModule):
 
 
 if __name__ == "__main__":
-    import psutil
     from config import get_config
-    from neuro_utils.describe import describe_model
 
     config = get_config()
 
-    device = torch.device("cpu")
-    # device = torch.device("cuda:0")
+    autoencoder = AdaptiveVAELightning(config.model, config.training)
 
-    autoencoder = AdaptiveVAE(config.model, config.training).to(device)
-    print("Encoder:")
-    describe_model(autoencoder.encoder)
-    # print("Adaptor:")
-    # describe_model(autoencoder.adaptor)
-    print("Aggregator:")
-    describe_model(autoencoder.aggregator)
-    print("Decoder:")
-    describe_model(autoencoder.decoder)
-    print("Final layer:")
-    describe_model(autoencoder.unembedding)
+    sample_input = torch.zeros((1, 1, *config.image_size))
+    sample_output = autoencoder.process_step(sample_input, "train", 0)
 
-    autoencoder.train()
-
-    # Track memory before execution
-    torch.cuda.reset_peak_memory_stats()
-    process = psutil.Process()
-    initial_mem = process.memory_info().rss  # in bytes
-
-    sample_input = torch.zeros((1, 1, *config.image_size)).to(device)
-    sample_output = autoencoder(sample_input, "train")
-
-    final_mem = process.memory_info().rss  # in bytes
-
-    print(sample_input.shape)
-    # print([x.shape for x in sample_output])
-    print(f"GPU: {torch.cuda.max_memory_allocated() / 2**30} GB peak mem used")
-    print(f"RAM: {(final_mem - initial_mem) / 2**30} GB peak mem used")
-
-    # losses = autoencoder.training_step({"scan": sample_input, "spacing": ...}, 0)
-    # from pprint import pprint
-    # pprint(losses)
+    print("Input shape: ", sample_input.shape)
+    print()
+    print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")

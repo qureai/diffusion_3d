@@ -1,13 +1,14 @@
 import torch
 from munch import munchify
-from vision_architectures.nets.swinv2_3d import SwinV23DConfig
+from vision_architectures.nets.perceiver_3d import Perceiver3DConfig
+from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoderConfig
 
 from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
 
 
 def get_config():
-    image_size = (256, 128, 128)
+    training_image_size = (96, 96, 96)
     model_config = {
         "swin": SwinV23DConfig.model_validate(
             {
@@ -17,11 +18,9 @@ def get_config():
                 "drop_prob": 0.1,
                 "stages": [
                     {
-                        "depth": 1,
+                        "depth": 2,
                         "num_heads": 8,
-                        "layer_norm_eps": 1e-6,
                         "window_size": (4, 4, 4),
-                        "use_relative_position_bias": True,
                         "attn_drop_prob": 0.1,
                         "proj_drop_prob": 0.1,
                         "mlp_drop_prob": 0.1,
@@ -31,11 +30,9 @@ def get_config():
                             "merge_window_size": (2, 2, 2),
                             "out_dim_ratio": 2,
                         },
-                        "depth": 1,
+                        "depth": 2,
                         "num_heads": 8,
-                        "layer_norm_eps": 1e-6,
                         "window_size": (4, 4, 4),
-                        "use_relative_position_bias": True,
                         "attn_drop_prob": 0.1,
                         "proj_drop_prob": 0.1,
                         "mlp_drop_prob": 0.1,
@@ -45,88 +42,68 @@ def get_config():
                             "merge_window_size": (2, 2, 2),
                             "out_dim_ratio": 2,
                         },
-                        "depth": 3,
+                        "depth": 4,
                         "num_heads": 16,
-                        "layer_norm_eps": 1e-6,
                         "window_size": (4, 4, 4),
-                        "use_relative_position_bias": True,
                         "attn_drop_prob": 0.1,
                         "proj_drop_prob": 0.1,
                         "mlp_drop_prob": 0.1,
                     },
-                    # {
-                    #     "patch_merging": {
-                    #         "merge_window_size": (2, 2, 2),
-                    #         "out_dim_ratio": 2,
-                    #     },
-                    #     "depth": 1,
-                    #     "num_heads": 16,
-                    #     "layer_norm_eps": 1e-6,
-                    #     "window_size": (2, 4, 4),
-                    #     "use_relative_position_bias": True,
-                    #     "attn_drop_prob": 0.1,
-                    #     "proj_drop_prob": 0.1,
-                    #     "mlp_drop_prob": 0.1,
-                    # },
+                    {
+                        "patch_merging": {
+                            "merge_window_size": (2, 2, 2),
+                            "out_dim_ratio": 2,
+                        },
+                        "depth": 2,
+                        "num_heads": 16,
+                        "window_size": (6, 6, 6),
+                        "attn_drop_prob": 0.1,
+                        "proj_drop_prob": 0.1,
+                        "mlp_drop_prob": 0.1,
+                    },
                 ],
             }
-        ),
+        )
     }
-    # model_config["adaptor"] = munchify(
-    #     {
-    #         "dim": model_config["swin"].stages[-1]._out_dim,
-    #         "adaptive_queries_size": (24, 8, 8),
-    #         "num_heads": 16,
-    #         "decoder_depth": 2,
-    #         "mlp_ratio": 4,
-    #         "layer_norm_eps": 1e-6,
-    #         "attn_drop_prob": 0.1,
-    #         "proj_drop_prob": 0.1,
-    #         "mlp_drop_prob": 0.1,
-    #     }
-    # )
-    # model_config["decoder"] = munchify(
-    #     {
-    #         "spatial_dims": 3,
-    #         "channels": [12, 12, 48, 192],
-    #         "in_channels": model_config["swin"].stages[-1]._out_dim,
-    #         "out_channels": model_config["swin"].in_channels,
-    #         "num_res_blocks": [1, 2, 2, 6],
-    #         "norm_num_groups": 12,
-    #         "norm_eps": 1e-6,
-    #         "attention_levels": [False, False, False, False],
-    #         "use_convtranspose": True,
-    #     }
-    # )
-    model_config["decoder"] = SwinV23DConfig.model_validate(
+    model_config["adaptor"] = Perceiver3DConfig.model_validate(
         {
-            "patch_size": (2, 2, 2),  # useless
-            "in_channels": 1,  # useless
-            "dim": model_config["swin"].stages[-1]._out_dim,
+            "encode": {
+                "dim": model_config["swin"].stages[-1].out_dim,
+                "num_latent_tokens": 1024,
+                "num_layers": 2,
+                "num_heads": 16,
+                "attn_drop_prob": 0.1,
+                "proj_drop_prob": 0.1,
+                "mlp_drop_prob": 0.1,
+            },
+            "process": {
+                "dim": model_config["swin"].stages[-1].out_dim,
+                "num_layers": 4,
+                "num_heads": 16,
+                "attn_drop_prob": 0.1,
+                "proj_drop_prob": 0.1,
+                "mlp_drop_prob": 0.1,
+            },
+            "decode": {
+                "dim": model_config["swin"].stages[-1].out_dim,
+                "num_layers": 2,
+                "num_heads": 16,
+                "out_channels": model_config["swin"].stages[-1].out_dim,
+                "attn_drop_prob": 0.1,
+                "proj_drop_prob": 0.1,
+                "mlp_drop_prob": 0.1,
+            },
+        }
+    )
+    model_config["decoder"] = SwinV23DDecoderConfig.model_validate(
+        {
+            "dim": model_config["swin"].stages[-1].out_dim,
             "drop_prob": 0.1,
             "stages": [
-                # {
-                #     "depth": 1,
-                #     "num_heads": 16,
-                #     "mlp_ratio": 4,
-                #     "layer_norm_eps": 1e-6,
-                #     "window_size": (2, 4, 4),
-                #     "use_relative_position_bias": True,
-                #     "attn_drop_prob": 0.1,
-                #     "proj_drop_prob": 0.1,
-                #     "mlp_drop_prob": 0.1,
-                #     "patch_splitting": {
-                #         "final_window_size": (2, 2, 2),
-                #         "out_dim_ratio": 2,
-                #     },
-                # },
                 {
-                    "depth": 3,
+                    "depth": 2,
                     "num_heads": 16,
-                    "mlp_ratio": 4,
-                    "layer_norm_eps": 1e-6,
-                    "window_size": (4, 4, 4),
-                    "use_relative_position_bias": True,
+                    "window_size": (6, 6, 6),
                     "attn_drop_prob": 0.1,
                     "proj_drop_prob": 0.1,
                     "mlp_drop_prob": 0.1,
@@ -136,12 +113,9 @@ def get_config():
                     },
                 },
                 {
-                    "depth": 1,
-                    "num_heads": 8,
-                    "mlp_ratio": 4,
-                    "layer_norm_eps": 1e-6,
+                    "depth": 4,
+                    "num_heads": 16,
                     "window_size": (4, 4, 4),
-                    "use_relative_position_bias": True,
                     "attn_drop_prob": 0.1,
                     "proj_drop_prob": 0.1,
                     "mlp_drop_prob": 0.1,
@@ -151,12 +125,21 @@ def get_config():
                     },
                 },
                 {
-                    "depth": 1,
+                    "depth": 2,
                     "num_heads": 8,
-                    "mlp_ratio": 4,
-                    "layer_norm_eps": 1e-6,
                     "window_size": (4, 4, 4),
-                    "use_relative_position_bias": True,
+                    "attn_drop_prob": 0.1,
+                    "proj_drop_prob": 0.1,
+                    "mlp_drop_prob": 0.1,
+                    "patch_splitting": {
+                        "final_window_size": (2, 2, 2),
+                        "out_dim_ratio": 2,
+                    },
+                },
+                {
+                    "depth": 2,
+                    "num_heads": 4,
+                    "window_size": (4, 4, 4),
                     "attn_drop_prob": 0.1,
                     "proj_drop_prob": 0.1,
                     "mlp_drop_prob": 0.1,
@@ -165,9 +148,24 @@ def get_config():
         }
     )
     model_config["unembedding"] = {
-        "in_channels": model_config["decoder"].stages[-1]._out_dim,
+        "num_upsamples": 1,
+        "upsample_channels": [
+            model_config["decoder"].stages[-1].out_dim // 2,
+        ],
+        "in_channels": model_config["decoder"].stages[-1].out_dim,
         "out_channels": model_config["swin"].in_channels,
     }
+
+    training_latent_shape = model_config["swin"].patch_size
+    for stage in model_config["swin"].stages:
+        training_latent_shape = stage.get_out_patch_size(training_latent_shape)
+    compression_factor = tuple(training_image_size[i] / training_latent_shape[i] for i in range(3))
+
+    transformsd_keys = ["image"]
+
+    batch_size = 20
+    num_train_samples_per_datapoint = 5
+    num_val_samples_per_datapoint = batch_size
 
     data_config = munchify(
         dict(
@@ -178,103 +176,146 @@ def get_config():
             limited_dataset_size=None,
             #
             allowed_spacings=((0.4, 7), (-1, -1), (-1, -1)),
-            allowed_shapes=((225, 256), (128, -1), (128, -1)),
+            allowed_shapes=((96, -1), (256, -1), (256, -1)),
             #
-            train_augmentations=[
-                {
-                    "__fn_name__": "random_resize_2d",
-                    "min_shape": (
-                        None,
-                        image_size[1],
-                        image_size[2],
-                    ),
-                    "max_shape": (
-                        None,
-                        min(int(image_size[1] * 1.1), image_size[1]),
-                        min(int(image_size[2] * 1.1), image_size[2]),
-                    ),
-                    "interpolation_mode": "bicubic",
-                },
-                {
-                    "__fn_name__": "random_crop",
-                    "target_shape": (-1, image_size[1], image_size[2]),
-                },
-                {
-                    "__fn_name__": "pad_to_multiple_of",
-                    "min_size": (32, image_size[1], image_size[2]),
-                    "tile_size": (32, 32, 32),
-                },
-                {
-                    "__fn_name__": "random_rotate",
-                    "degrees": 15,
-                },
-                {
-                    "__fn_name__": "random_windowing",
-                    # "hotspots_and_stds": [
-                    #     ((2000, 500), (10, 5)),  # Bone
-                    #     ((1600, -600), (16, 6)),  # Lung
-                    #     ((400, 40), (4, 1)),  # Abdomen
-                    #     ((350, 50), (4, 1)),  # Soft Tissue
-                    #     ((160, 60), (2, 1)),  # Liver
-                    #     ((500, 50), (5, 1)),  # Mediastinum
-                    # ],
-                    # "sampling_probability": [1 / 6] * 6,
-                    "window_choices": [
-                        (3000, 500),  # Overall range
-                    ],
-                    "normalize_range": (-1.0, 1.0),
-                },
-                {
-                    "__fn_name__": "random_horizontal_flip",
-                    "probability": 0.5,
-                },
-                [
-                    [0.4, 0.3, 0.3],
-                    [],
-                    [
-                        {
-                            "__fn_name__": "random_gaussian_blurring",
-                            "sigma_range": (0, 1),
-                        }
-                    ],
-                    [
-                        {
-                            "__fn_name__": "random_unsharp_masking",
-                            "sigma_range": (0, 1),
-                            "alpha_range": (0.5, 2),
-                        }
-                    ],
+            train_augmentations={
+                "_target_": "monai.transforms.Compose",
+                "transforms": [
+                    {
+                        "_target_": "monai.transforms.CropForegroundd",
+                        "keys": transformsd_keys,
+                        "source_key": transformsd_keys[0],
+                    },
+                    {
+                        "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
+                        "keys": transformsd_keys,
+                        "a_min": -1000,
+                        "a_max": 2000,
+                        "b_min": -1.0,
+                        "b_max": 1.0,
+                        "clip": True,
+                    },
+                    # {
+                    #     "_target_": "monai.transforms.RandomOrder",
+                    #     "transforms": [
+                    #         {  # Rotate
+                    #             "_target_": "monai.transforms.RandRotated",
+                    #             "keys": transformsd_keys,
+                    #             "range_x": 20,
+                    #             "prob": 1.0,
+                    #         },
+                    #         {  # Scale
+                    #             "_target_": "monai.transforms.RandZoomd",
+                    #             "keys": transformsd_keys,
+                    #             "min_zoom": 0.5,
+                    #             "max_zoom": 1.1,
+                    #             "prob": 0.9,
+                    #         },
+                    #         {  # Shear
+                    #             "_target_": "monai.transforms.RandAffined",
+                    #             "keys": transformsd_keys,
+                    #             "shear_range": (0, 0, -0.35, 0.35, -0.35, 0.35),
+                    #             "prob": 0.2,
+                    #         },
+                    #     ],
+                    # },
+                    {
+                        "_target_": "monai.transforms.RandSpatialCropSamplesd",
+                        "keys": transformsd_keys,
+                        "roi_size": training_image_size,
+                        "max_roi_size": tuple(int(size * 2.0) for size in training_image_size),
+                        "random_size": True,
+                        "num_samples": num_train_samples_per_datapoint,
+                    },
+                    {
+                        "_target_": "monai.transforms.Resized",
+                        "keys": transformsd_keys,
+                        "spatial_size": training_image_size,
+                        "mode": "trilinear",
+                        "anti_aliasing": True,
+                    },
+                    {
+                        "_target_": "monai.transforms.RandomOrder",
+                        "transforms": [
+                            {
+                                "_target_": "monai.transforms.RandFlipd",
+                                "keys": transformsd_keys,
+                                "prob": 0.5,
+                            },
+                            {
+                                "_target_": "monai.transforms.RandKSpaceSpikeNoised",
+                                "keys": transformsd_keys,
+                                "intensity_range": (12, 18),
+                                "prob": 0.1,
+                            },
+                            {
+                                "_target_": "monai.transforms.OneOf",
+                                "transforms": [
+                                    {
+                                        "_target_": "monai.transforms.RandGaussianNoised",
+                                        "keys": transformsd_keys,
+                                        "prob": 0.75,
+                                    },
+                                    {
+                                        "_target_": "monai.transforms.RandGaussianSmoothd",
+                                        "keys": transformsd_keys,
+                                        "prob": 0.75,
+                                    },
+                                    {
+                                        "_target_": "monai.transforms.RandGaussianSharpend",
+                                        "keys": transformsd_keys,
+                                        "prob": 0.75,
+                                    },
+                                ],
+                            },
+                        ],
+                    },
                 ],
-            ],
-            val_augmentations=[
-                {
-                    "__fn_name__": "resize_2d",
-                    "target_shape": (None, image_size[1], image_size[2]),
-                    "interpolation_mode": "bicubic",
-                },
-                {
-                    "__fn_name__": "pad_to_multiple_of",
-                    "min_size": (32, image_size[1], image_size[2]),
-                    "tile_size": (32, 32, 32),
-                },
-                {
-                    "__fn_name__": "random_windowing",
-                    "window_choices": [
-                        # (2000, 500),  # Bone
-                        # (1600, -600),  # Lung
-                        # (400, 40),  # Abdomen
-                        # (350, 50),  # Soft Tissue
-                        # (160, 60),  # Liver
-                        # (500, 50),  # Mediastinum
-                        (3000, 500),  # Overall range
-                    ],
-                    "normalize_range": (-1.0, 1.0),
-                },
-            ],
+            },
+            val_augmentations={
+                "_target_": "monai.transforms.Compose",
+                "transforms": [
+                    {
+                        "_target_": "monai.transforms.CropForegroundd",
+                        "keys": transformsd_keys,
+                        "source_key": transformsd_keys[0],
+                    },
+                    {
+                        "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
+                        "keys": transformsd_keys,
+                        "a_min": -1000,
+                        "a_max": 2000,
+                        "b_min": -1.0,
+                        "b_max": 1.0,
+                        "clip": True,
+                    },
+                    {
+                        "_target_": "monai.transforms.SpatialPadd",
+                        "keys": transformsd_keys,
+                        "spatial_size": training_image_size,
+                        "mode": "constant",
+                        "value": -1,
+                    },
+                    {
+                        "_target_": "monai.transforms.DivisiblePadd",
+                        "keys": transformsd_keys,
+                        "k": training_latent_shape,
+                        "mode": "constant",
+                        "value": -1,
+                    },
+                    {
+                        "_target_": "monai.transforms.RandSpatialCropSamplesd",
+                        "keys": transformsd_keys,
+                        "roi_size": training_image_size,
+                        "num_samples": num_val_samples_per_datapoint,
+                    },
+                ],
+            },
             #
-            num_workers=8,
-            batch_size=2,  # int(torch.cuda.get_device_properties(0).total_memory // 15e9),
-            train_sample_size=3_000,
+            num_workers=16,
+            train_batch_size=batch_size // num_train_samples_per_datapoint,
+            val_batch_size=batch_size // num_val_samples_per_datapoint,
+            train_sample_size=4_000,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -292,11 +333,14 @@ def get_config():
             loss_weights={
                 "reconstruction_loss": 1.0,
                 "perceptual_loss": 0.1,
-                # "tv_loss": 0.01,
                 "ms_ssim_loss": 0.1,
-                "kl_loss": 0.01,
+                "kl_loss": 1e-4,
+                # "spectral_loss": 1e-6,
             },
             kl_annealing_epochs=30,
+            # free_bits=1.0,
+            #
+            checkpointing_level=2,
             #
             fast_dev_run=False,
             strategy="ddp",
@@ -306,30 +350,35 @@ def get_config():
         )
     )
 
-    grid_sizes = []
+    patch_sizes = [model_config["swin"].patch_size]
     for i in range(len(model_config["swin"].stages)):
-        grid_sizes.append(
-            tuple([size // patch for size, patch in zip(image_size, model_config["swin"].stages[i]._out_patch_size)])
-        )
+        patch_sizes.append(model_config["swin"].stages[i].get_out_patch_size(patch_sizes[-1]))
+    grid_sizes = []
+    for i in range(len(model_config["swin"].stages) + 1):
+        grid_sizes.append(tuple([size // patch for size, patch in zip(training_image_size, patch_sizes[i])]))
     # Ensure grid size can be divided by window size
     for i in range(len(model_config["swin"].stages)):
         assert all(
             [grid % window == 0 for grid, window in zip(grid_sizes[i], model_config["swin"].stages[i].window_size)]
         ), f"{grid_sizes[i]} is not divisible by {model_config['swin'].stages[i].window_size}"
     clearml_tags = [
-        f"Training image size: {image_size}",
-        f"Patch sizes: {[stage._out_patch_size for stage in model_config['swin'].stages]}",
+        f"Training image size: {training_image_size}",
+        f"Patch sizes: {patch_sizes}",
         f"Grid sizes: {grid_sizes}",
-        f"Dimensions: {[stage._out_dim for stage in model_config['swin'].stages]}",
-        f"Batch size: {data_config.batch_size}",
+        f"Dimensions: {[stage.out_dim for stage in model_config['swin'].stages]}",
+        f"Train batch size: {data_config.train_batch_size}",
+        f"Compression: {compression_factor}",
+        f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Decreased number of stages to 3",
+        "Added adaptor architecture",
+        "Updated augmentations",
+        "Added activation checkpointing",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v21__2025_03_01",
+            task_name="v25__2025_03_06",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
@@ -364,8 +413,20 @@ def get_config():
             distributed=distributed_config,
             additional=additional_config,
             #
-            image_size=image_size,
+            image_size=training_image_size,
         )
     )
 
     return config
+
+
+if __name__ == "__main__":
+    from hydra.utils import instantiate
+
+    config = get_config()
+
+    sample_input = torch.zeros((1, 100, 100, 100))
+    transforms = instantiate(config.data.toDict()["train_augmentations"])
+    print(transforms)
+    sample_output = transforms(sample_input)
+    print(sample_output.shape)

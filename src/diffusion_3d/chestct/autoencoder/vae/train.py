@@ -8,7 +8,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from munch import munchify
 from neuro_utils.describe import describe_model
 
-from diffusion_3d.chestct.autoencoder.vae.model import AdaptiveVAE
+from diffusion_3d.chestct.autoencoder.vae.model import AdaptiveVAELightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
 
 torch.set_float32_matmul_precision("medium")
@@ -35,7 +35,7 @@ if not config.training.fast_dev_run and config.additional.log_on_clearml:
 
 # Create model and datamodule
 if config.training.start_from_checkpoint is not None:
-    autoencoder = AdaptiveVAE.load_from_checkpoint(
+    model = AdaptiveVAELightning.load_from_checkpoint(
         config.training.start_from_checkpoint,
         model_config=config.model,
         training_config=config.training,
@@ -43,21 +43,23 @@ if config.training.start_from_checkpoint is not None:
     )
     print(f"Started from: {config.training.start_from_checkpoint}")
 else:
-    autoencoder = AdaptiveVAE(config.model, config.training)
+    model = AdaptiveVAELightning(config.model, config.training)
 datamodule = CTRATEDataModule(config.data)
 
 
 # Add model size tags to clearml
 if task is not None:
-    embeddings_params = sum(p.numel() for p in autoencoder.encoder.embeddings.parameters())
-    encoder_params = sum(p.numel() for p in autoencoder.encoder.encoder.parameters())
-    decoder_params = sum(p.numel() for p in autoencoder.decoder.parameters())
-    total_params = sum(p.numel() for p in autoencoder.parameters())
-    any_other_params = total_params - (embeddings_params + encoder_params + decoder_params)
+    encoder_params = sum(p.numel() for p in model.autoencoder.encoder.parameters())
+    perceiver_params = sum(p.numel() for p in model.autoencoder.adapt.parameters()) + sum(
+        p.numel() for p in model.autoencoder.unadapt.parameters()
+    )
+    decoder_params = sum(p.numel() for p in model.autoencoder.decoder.parameters())
+    total_params = sum(p.numel() for p in model.autoencoder.parameters())
+    any_other_params = total_params - (encoder_params + perceiver_params + decoder_params)
     task.add_tags(
         [
-            f"Embeddings: {embeddings_params:,} params",
             f"Encoder: {encoder_params:,} params",
+            f"Perceiver: {perceiver_params:,} params",
             f"Decoder: {decoder_params:,} params",
             f"Other: {any_other_params:,} params",
             f"Total: {total_params:,} params",
@@ -119,4 +121,4 @@ if trainer.global_rank == 0:
 
 
 # Train
-trainer.fit(autoencoder, datamodule)
+trainer.fit(model, datamodule)

@@ -8,13 +8,16 @@ import pandas as pd
 import torch
 from clearml import Logger
 from ct_pretraining import augmentations as all_augmentations
+from hydra.utils import instantiate
 from monai.data.dataloader import DataLoader
-from monai.data.dataset import CacheDataset
+from monai.data.dataset import PersistentDataset
+from monai.transforms import Compose, LoadImaged
 from safetensors import safe_open
 from sklearn.model_selection import train_test_split
 from torch.distributed import get_rank
 from torch.utils.data import WeightedRandomSampler
 from tqdm.auto import tqdm
+from vision_architectures.image_readers.safetensors_reader import SafetensorsReader
 
 
 class CTRATEDataModule(L.LightningDataModule):
@@ -28,13 +31,18 @@ class CTRATEDataModule(L.LightningDataModule):
         dataset = CTRATEDataset(self.config, run_type)
 
         sampler = None
-        if run_type == "train" and self.config.train_sample_size > 0:
-            weights = dataset.get_weights_for_sampling(self.config.sample_balance_cols)
-            sampler = WeightedRandomSampler(weights, self.config.train_sample_size, replacement=True)
+        if run_type == "train":
+            batch_size = self.config.train_batch_size
+
+            if self.config.train_sample_size > 0:
+                weights = dataset.get_weights_for_sampling(self.config.sample_balance_cols)
+                sampler = WeightedRandomSampler(weights, self.config.train_sample_size, replacement=True)
+        else:
+            batch_size = self.config.val_batch_size
 
         dataloader = DataLoader(
             dataset,
-            batch_size=self.config.batch_size,
+            batch_size=batch_size,
             shuffle=False,
             num_workers=self.config.num_workers,
             pin_memory=True,
@@ -51,18 +59,37 @@ class CTRATEDataModule(L.LightningDataModule):
         return self.create_dataloader("valid")
 
 
-class CTRATEDataset(CacheDataset):
+class CTRATEDataset(PersistentDataset):
     def __init__(self, config, run_type):
         self.config = config
         self.run_type = run_type
 
+        # Finalize transforms
+        self.load_image_transform = LoadImaged(keys=["image"], reader=SafetensorsReader(), dtype=torch.float32)
+
+        if run_type == "train":
+            self.transforms = Compose([self.load_image_transform, instantiate(self.config.train_augmentations)])
+        else:
+            self.transforms = Compose([self.load_image_transform, instantiate(self.config.val_augmentations)])
+        self.transforms = self.transforms.flatten()
+
+        # Load all data, perform checks, filter, and finalize
         self.load_csv()
         if self.run_type != "custom":
             self.sample_dataset()
             self.perform_checks()
+        self.finalize_data()
 
-        print(f"No. of {run_type} datapoints: {len(self)}")
+        print(f"No. of {run_type} datapoints: {len(self.data)}")
 
+        super().__init__(
+            data=self.data,
+            transform=self.transforms,
+            # cache_dir="/raid3/arjun/training_cache/ct_rate",
+            cache_dir=None,
+        )
+
+        # ClearML Log
         self.tables = [
             self.dataset[cols].value_counts()
             for cols in [
@@ -156,65 +183,29 @@ class CTRATEDataset(CacheDataset):
             if not os.path.exists(filepath):
                 continue
 
-            self.dataset.loc[i, "__filepath__"] = filepath
+            self.dataset.loc[i, "image"] = filepath
 
-        self.dataset = self.dataset.dropna(subset=["__filepath__"])
+        self.dataset = self.dataset.dropna(subset=["image"])
 
-    def augment(self, scan, spacing, i, augmentations):
-        other = self.dataset.loc[i]
+    # def augment(self, scan, spacing, i, augmentations):
+    #     other = self.dataset.loc[i]
 
-        for augmentation in augmentations:
-            if isinstance(augmentation, list):
-                probabilities = augmentation[0]
-                chosen_path_index = random.choices(
-                    population=list(range(1, len(probabilities) + 1)), weights=probabilities, k=1
-                )[0]
-                chosen_path = augmentation[chosen_path_index]
-                scan, spacing = self.augment(scan, spacing, i, chosen_path)
-            else:
-                augmentation_fn = getattr(all_augmentations, augmentation.__fn_name__)
-                scan, spacing = augmentation_fn(scan, spacing, augmentation, other)
+    #     for augmentation in augmentations:
+    #         if isinstance(augmentation, list):
+    #             probabilities = augmentation[0]
+    #             chosen_path_index = random.choices(
+    #                 population=list(range(1, len(probabilities) + 1)), weights=probabilities, k=1
+    #             )[0]
+    #             chosen_path = augmentation[chosen_path_index]
+    #             scan, spacing = self.augment(scan, spacing, i, chosen_path)
+    #         else:
+    #             augmentation_fn = getattr(all_augmentations, augmentation.__fn_name__)
+    #             scan, spacing = augmentation_fn(scan, spacing, augmentation, other)
 
-        return scan, spacing
+    #     return scan, spacing
 
-    def load_scan(self, filepath):
-        with safe_open(filepath, framework="pt") as f:
-            scan: torch.Tensor = f.get_tensor("images")
-            spacing: torch.Tensor = f.get_tensor("spacing")
-
-        scan = scan.type(torch.float32)
-        spacing = spacing.type(torch.float16)
-
-        return scan, spacing
-
-    def __getitem__(self, i):
-        i = self.dataset.index[i]
-
-        uid = self.dataset.loc[i, "SeriesUID"]
-        filepath = self.dataset.loc[i, "__filepath__"]
-        scan, spacing = self.load_scan(filepath)
-
-        if self.run_type == "train":
-            scan, spacing = self.augment(scan, spacing, i, self.config.train_augmentations)
-        elif self.run_type == "valid":
-            scan, spacing = self.augment(scan, spacing, i, self.config.val_augmentations)
-
-        scan = scan.type(torch.float32).unsqueeze(0)
-        # scan: torch.Tensor = scan.nan_to_num()
-        # assert not scan.isnan().any().item(), i
-
-        if self.run_type == "custom":
-            return scan, spacing, self.dataset.loc[i, "SeriesUID"]
-
-        return {
-            "scan": scan,
-            "spacing": spacing,
-            "uid": uid,
-            "index": i,
-        }
-
-    def __len__(self):
-        return len(self.dataset)
+    def finalize_data(self):
+        self.data = self.dataset.to_dict(orient="records")
 
     def get_weights_for_sampling(self, colnames):
         weights = []
@@ -235,12 +226,12 @@ class CTRATEDataset(CacheDataset):
 
 
 if __name__ == "__main__":
-    from diffusion_3d.chestct.autoencoder.config import get_config
+    from diffusion_3d.chestct.autoencoder.vae.config import get_config
 
     cfg = get_config()
 
     dataset = CTRATEDataset(cfg.data, "train")
-    print(dataset[0]["scan"].shape)
+    print(dataset[0]["image"].shape)
 
     dataset = CTRATEDataset(cfg.data, "valid")
-    print(dataset[0]["scan"].shape)
+    print(dataset[0]["image"].shape)
