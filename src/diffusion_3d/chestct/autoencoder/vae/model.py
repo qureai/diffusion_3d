@@ -7,15 +7,15 @@ from ct_pretraining.schedulers.decaying_sine import DecayingSineLR
 from einops import rearrange, reduce
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
-from monai.networks.nets.autoencoderkl import AutoencoderKL, Decoder
 from munch import Munch
+from prettytable import PrettyTable
 from torch import nn
 from torch.nn import L1Loss, MSELoss
 from torch.nn import functional as F
 from vision_architectures.layers.embeddings import AbsolutePositionEmbeddings3D
 from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoder, SwinV23DModel
 
-from diffusion_3d.chestct.autoencoder.vae.nn import AdaptiveVAE
+from diffusion_3d.chestct.autoencoder.vae.nn import AdaptiveVAE, SigmoidScheduler
 
 
 class AdaptiveVAELightning(L.LightningModule):
@@ -45,6 +45,8 @@ class AdaptiveVAELightning(L.LightningModule):
 
         self.train_metrics = []
         self.val_metrics = []
+
+        self.kl_beta_scheduler = SigmoidScheduler()
 
     def calculate_reconstruction_loss(self, reconstructed, x):
         return self.reconstruction_loss(reconstructed, x)
@@ -187,6 +189,31 @@ class AdaptiveVAELightning(L.LightningModule):
             "ms_ssim": self.calculate_ms_ssim(reconstructed, x),
         }
 
+    def calculate_autoencoder_loss(self, all_losses):
+        # Apply beta annealing
+        if not self.kl_beta_scheduler.is_ready():
+            steps_per_epoch = self.trainer.estimated_stepping_batches // self.trainer.max_epochs
+            kl_annealing_epochs = self.training_config.kl_annealing_epochs
+            kl_annealing_steps = kl_annealing_epochs * steps_per_epoch
+            self.kl_beta_scheduler.set_num_steps(kl_annealing_steps)
+
+        kl_beta = 0.0
+        if self.current_epoch >= self.training_config.kl_annealing_start_epoch:
+            kl_beta = self.kl_beta_scheduler.get()
+            self.kl_beta_scheduler.step()
+        all_losses["kl_loss"] = kl_beta * all_losses["kl_loss"]
+        # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
+
+        self.log("train_kl_step/beta", kl_beta, sync_dist=True, on_step=True)
+
+        all_losses["autoencoder_loss"] = (
+            self.training_config.loss_weights["reconstruction_loss"] * all_losses["reconstruction_loss"]
+            + self.training_config.loss_weights["perceptual_loss"] * all_losses["perceptual_loss"]
+            + self.training_config.loss_weights["ms_ssim_loss"] * all_losses["ms_ssim_loss"]
+            + self.training_config.loss_weights["kl_loss"] * all_losses["kl_loss"]
+            # + self.training_config.loss_weights["spectral_loss"] * all_losses["spectral_loss"]
+        )
+
     def process_step(self, x, prefix, batch_idx):
         autoencoder_output = self(x, prefix)
         reconstructed = autoencoder_output["reconstructed"]
@@ -196,17 +223,7 @@ class AdaptiveVAELightning(L.LightningModule):
         all_losses = self.calculate_basic_losses(x, reconstructed, encoded_mu, encoded_sigma)
         all_metrics = self.calculate_metrics(x, reconstructed)
 
-        kl_beta = min(1, (1 + self.current_epoch) / self.training_config.kl_annealing_epochs)
-        all_losses["kl_loss"] = kl_beta * all_losses["kl_loss"]
-        # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
-
-        all_losses["autoencoder_loss"] = (
-            self.training_config.loss_weights["reconstruction_loss"] * all_losses["reconstruction_loss"]
-            + self.training_config.loss_weights["perceptual_loss"] * all_losses["perceptual_loss"]
-            + self.training_config.loss_weights["ms_ssim_loss"] * all_losses["ms_ssim_loss"]
-            + self.training_config.loss_weights["kl_loss"] * all_losses["kl_loss"]
-            # + self.training_config.loss_weights["spectral_loss"] * all_losses["spectral_loss"]
-        )
+        self.calculate_autoencoder_loss(all_losses)
 
         # Log
         step_log = {}
@@ -224,12 +241,12 @@ class AdaptiveVAELightning(L.LightningModule):
             epoch_log[f"{prefix}_epoch_metrics/{key}"] = float(value)
 
         try:
-            self.log_dict(step_log, sync_dist=True, on_step=True, on_epoch=False, prog_bar=False)
+            self.log_dict(step_log, sync_dist=True, on_step=True, on_epoch=False)
         except:
             print(f"Error in logging steps {step_log}")
 
         try:
-            self.log_dict(epoch_log, sync_dist=True, on_step=False, on_epoch=True, prog_bar=True)
+            self.log_dict(epoch_log, sync_dist=True, on_step=False, on_epoch=True)
         except:
             print(f"Error in logging epochs {epoch_log}")
 
@@ -240,15 +257,6 @@ class AdaptiveVAELightning(L.LightningModule):
             "encoded_mu": encoded_mu,
             "encoded_sigma": encoded_sigma,
         }
-
-    # def process_epoch(self, losses, metrics, prefix):
-    #     losses = {key: [d[key].item() for d in losses] for key in losses[0]}
-    #     losses = {key: np.mean(value).item() for key, value in losses.items()}
-
-    #     metrics = {key: [d[key].item() for d in metrics] for key in metrics[0]}
-    #     metrics = {key: np.mean(value).item() for key, value in metrics.items()}
-
-    #     self.print_numbers(f"{prefix}", losses | metrics)
 
     def on_after_backward(self):
         # Log gradient info
@@ -271,13 +279,12 @@ class AdaptiveVAELightning(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         return self.process_step(batch["image"], "val", batch_idx)
 
-    # def on_train_epoch_end(self):
-    #     self.process_epoch(self.train_losses, self.train_metrics, "train")
-    #     self.train_losses.clear()
+    def on_train_epoch_end(self):
+        # self.process_epoch("train")
+        self.print_numbers()
 
     # def on_validation_epoch_end(self):
-    #     self.process_epoch(self.val_losses, self.val_metrics, "val")
-    #     self.val_losses.clear()
+    #     self.process_epoch("val")
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.training_config.lr)
@@ -293,19 +300,34 @@ class AdaptiveVAELightning(L.LightningModule):
 
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
-    def print_numbers(self, prefix, numbers):
+    def print_numbers(self):
         if self.global_rank != 0:
             return
 
+        numbers = self.trainer.logged_metrics
+        numbers = list(numbers.items())
+        for i in range(len(numbers)):
+            numbers[i] = [*numbers[0].split("/"), round(float(numbers[1]), 5)]
+        numbers = sorted(numbers)
+
         print()
         print()
-        print("{}: Epoch = {:<4}".format(prefix, self.current_epoch))
-        for key, number in numbers.items():
-            print("{} = {:.5f}".format(key.ljust(20), number))
+        print("Epoch = {:<4}".format(self.current_epoch))
+        table = PrettyTable(["Metric", "Value"])
+        table.add_rows(numbers)
+        print(table)
         print()
 
     def forward(self, x, run_type="val"):
         # x: (b, d1, z1, y1, x1)
+
+        residual_connection = self.autoencoder.residual_connection
+        if not residual_connection.weight_scheduler.is_ready():
+            steps_per_epoch = self.trainer.estimated_stepping_batches // self.trainer.max_epochs
+            residual_connection_epochs = self.training_config.residual_connection_epochs
+            residual_connection_steps = residual_connection_epochs * steps_per_epoch
+            residual_connection.set_num_steps(residual_connection_steps)
+
         return self.autoencoder(x, run_type)
 
     # def on_before_zero_grad(self, optimizer):

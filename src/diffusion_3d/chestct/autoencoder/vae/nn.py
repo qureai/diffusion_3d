@@ -1,3 +1,6 @@
+import math
+import random
+
 import torch
 from einops import rearrange
 from torch import nn
@@ -8,7 +11,92 @@ from vision_architectures.nets.perceiver_3d import (
     Perceiver3DDecoder,
     Perceiver3DEncoder,
 )
-from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoder, SwinV23DModel
+from vision_architectures.nets.swinv2_3d import SwinV23DDecoder, SwinV23DModel
+
+
+class SigmoidScheduler:
+    def __init__(self, min_y=0.0, max_y=1.0, min_x=-10, max_x=10):
+        assert min_x < max_x, "min_x must be less than max_x"
+        assert min_y < max_y, "min_y must be less than max_y"
+
+        self.min_y = min_y
+        self.max_y = max_y
+        self.min_x = min_x
+        self.max_x = max_x
+        self.num_steps = ...
+        self.x_step_size = ...
+
+        self.x = min_x
+
+    @staticmethod
+    def _sigmoid(x):
+        return 1 / (1 + math.exp(-x))
+
+    def set_num_steps(self, num_steps):
+        if self.num_steps == ...:
+            self.num_steps = num_steps
+            self.x_step_size = (self.max_x - self.min_x) / self.num_steps
+
+    def is_ready(self):
+        return self.num_steps != ...
+
+    def get(self):
+        if not self.is_ready():
+            raise ValueError("Call set_num_steps first")
+        y = self._sigmoid(self.x)
+        scaled_y = self._scale(y)
+        return scaled_y
+
+    def step(self):
+        if not self.is_ready():
+            raise ValueError("Call set_num_steps first")
+        self.x = min(self.x + self.x_step_size, self.max_x)
+
+    def _scale(self, y):
+        scaled_y = (y - self.min_y) / (self.max_y - self.min_y)
+        return scaled_y
+
+
+class GradientStabilizer(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.norm_pre = nn.LayerNorm(dim, eps=1e-6)
+        self.projection = nn.Linear(dim, dim)
+        # Initialize with near-identity transformation
+        nn.init.eye_(self.projection.weight)
+        nn.init.zeros_(self.projection.bias)
+        self.activation = nn.GELU()  # Scale-stabilizing activation
+        self.norm_post = nn.LayerNorm(dim, eps=1e-6)
+
+    def forward(self, x):
+        x = self.norm_pre(x)
+        x = self.projection(x)
+        x = self.activation(x)
+        x = self.norm_post(x)
+        return x
+
+
+class AdaptorResidualConnection(nn.Module):
+    def __init__(self, pathway_drop_prob=0.0):
+        super().__init__()
+
+        self.pathway_drop_prob = pathway_drop_prob  # helps avoid co-adaptation
+        self.weight_scheduler = SigmoidScheduler()
+
+    def set_num_steps(self, num_steps):
+        self.weight_scheduler.set_num_steps(num_steps)
+
+    def forward(self, swin_encoder_output, perceiver_decoder_output):
+        perceiver_weight = self.weight_scheduler.get()
+        self.weight_scheduler.step()
+        if random.random() < self.pathway_drop_prob:
+            perceiver_weight = random.choice(
+                [self.weight_scheduler._sigmoid(-100), self.weight_scheduler._sigmoid(100)]
+            )
+        swin_weight = 1 - perceiver_weight
+
+        output = swin_weight * swin_encoder_output + perceiver_weight * perceiver_decoder_output
+        return output
 
 
 class UpsampleLayer(nn.Module):
@@ -93,31 +181,32 @@ class AdaptiveVAE(nn.Module):
 
         latent_channels = model_config.adaptor.dim
 
-        input_channel_mapping_config = Perceiver3DChannelMappingConfig(
-            in_channels={stage.dim for stage in model_config.swin.stages},
-            out_channels=latent_channels,
-        )
-        input_channel_mapping = Perceiver3DChannelMapping(input_channel_mapping_config)
-        decode_position_embeddings = AbsolutePositionEmbeddings3D(dim=latent_channels)
+        # input_channel_mapping_config = Perceiver3DChannelMappingConfig(
+        #     in_channels={stage.dim for stage in model_config.swin.stages},
+        #     out_channels=latent_channels,
+        # )
+        # input_channel_mapping = Perceiver3DChannelMapping(input_channel_mapping_config)
+        # decode_position_embeddings = AbsolutePositionEmbeddings3D(dim=latent_channels)
 
         self.encoder = SwinV23DModel(model_config.swin, checkpointing_level)
-        self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)
-        self.quant_conv_mu = nn.Linear(latent_channels, latent_channels)
-        self.quant_conv_log_sigma = nn.Linear(latent_channels, latent_channels)
-        self.post_quant_conv = nn.Linear(latent_channels, latent_channels)
-        self.unadapt = Perceiver3DDecoder(model_config.adaptor, decode_position_embeddings, checkpointing_level)
-
+        # self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)
+        # self.encoder_stabilizer = GradientStabilizer(latent_channels)
+        # self.quant_conv_mu = nn.Linear(latent_channels, latent_channels)
+        # self.quant_conv_log_sigma = nn.Linear(latent_channels, latent_channels)
+        # self.post_quant_conv = nn.Linear(latent_channels, latent_channels)
+        # self.decoder_stabilizer = GradientStabilizer(latent_channels)
+        # self.unadapt = Perceiver3DDecoder(model_config.adaptor, decode_position_embeddings, checkpointing_level)
+        # self.residual_connection = AdaptorResidualConnection(model_config.pathway_drop_prob)
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
         self.unembedding = UnembeddingLayer(model_config.unembedding)
 
     def encode(self, x: torch.Tensor, return_stage_outputs=False):
         encoded, stage_outputs, _ = self.encoder(x)
-
-        encoder_out_shape = encoded.shape[2:]
+        return encoded, encoded, encoded
 
         sliding_window, sliding_stride = None, None
         if not self.training:
-            sliding_window = 2**16
+            sliding_window = 2**14
             sliding_stride = sliding_window // 2
 
         adapted = self.adapt(
@@ -126,27 +215,39 @@ class AdaptiveVAE(nn.Module):
             sliding_stride=sliding_stride,
         )
 
+        adapted = self.encoder_stabilizer(adapted)
+
         z_mu = self.quant_conv_mu(adapted)
         z_log_var = self.quant_conv_log_sigma(adapted)
         z_log_var = torch.clamp(z_log_var, -30.0, 20.0)
         z_sigma = torch.exp(z_log_var / 2)
 
         if return_stage_outputs:
-            return z_mu, z_sigma, encoder_out_shape, stage_outputs
-        return z_mu, z_sigma, encoder_out_shape
+            return z_mu, z_sigma, encoded, stage_outputs
+        return z_mu, z_sigma, encoded
 
     def sampling(self, z_mu: torch.Tensor, z_sigma: torch.Tensor) -> torch.Tensor:
         eps = torch.randn_like(z_sigma)
         z_vae = z_mu + eps * z_sigma
         return z_vae
 
-    def decode(self, z: torch.Tensor, decoder_in_shape: tuple[int, int, int]):
+    def decode(self, z: torch.Tensor, swin_encoder_output):
+        z = rearrange(z, "b d z y x -> b z y x d")
+        dec, _, _ = self.decoder(z)
+        dec = rearrange(dec, "b z y x d -> b d z y x")
+        return dec
+
         z = self.post_quant_conv(z)
 
+        z = self.decoder_stabilizer(z)
+
+        decoder_in_shape = swin_encoder_output.shape[2:]
         unadapted = self.unadapt(z, out_shape=decoder_in_shape)
 
+        decoder_input = self.residual_connection(swin_encoder_output, unadapted)
+
         unadapted = rearrange(unadapted, "b d z y x -> b z y x d")
-        dec, _, _ = self.decoder(unadapted)
+        dec, _, _ = self.decoder(decoder_input)
         dec = rearrange(dec, "b z y x d -> b d z y x")
 
         return dec
@@ -154,14 +255,15 @@ class AdaptiveVAE(nn.Module):
     def forward(self, x, run_type="val"):
         # x: (b, d1, z1, y1, x1)
 
-        encoded_mu, encoded_sigma, encoder_out_shape = self.encode(x)
-        if run_type == "train":
-            encoded = self.sampling(encoded_mu, encoded_sigma)
-        else:
-            encoded = encoded_mu
-        # (b, d2, z2, y2, x2)
+        encoded_mu, encoded_sigma, swin_encoder_output = self.encode(x)
+        encoded = encoded_mu
+        # if run_type == "train":
+        #     encoded = self.sampling(encoded_mu, encoded_sigma)
+        # else:
+        #     encoded = encoded_mu
+        # # (b, d2, z2, y2, x2)
 
-        decoded = self.decode(encoded, decoder_in_shape=encoder_out_shape)
+        decoded = self.decode(encoded, swin_encoder_output)
         # (b, d3, z3, y3, x3)
 
         reconstructed = self.unembedding(decoded)
@@ -184,15 +286,16 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    device = torch.device("cuda:0")
+    # device = torch.device("cuda:0")
 
     autoencoder = AdaptiveVAE(config.model, 2).to(device)
+    # autoencoder.residual_connection.set_num_steps(100)
     print("Encoder:")
     describe_model(autoencoder.encoder)
-    print("Adapt:")
-    describe_model(autoencoder.adapt)
-    print("Unadapt:")
-    describe_model(autoencoder.unadapt)
+    # print("Adapt:")
+    # describe_model(autoencoder.adapt)
+    # print("Unadapt:")
+    # describe_model(autoencoder.unadapt)
     print("Decoder:")
     describe_model(autoencoder.decoder)
     print("Final layer:")

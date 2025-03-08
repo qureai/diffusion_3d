@@ -1,13 +1,11 @@
 import ast
 import os
-import random
 from collections import Counter
 
 import lightning as L
 import pandas as pd
 import torch
 from clearml import Logger
-from ct_pretraining import augmentations as all_augmentations
 from hydra.utils import instantiate
 from monai.data.dataloader import DataLoader
 from monai.data.dataset import PersistentDataset
@@ -37,8 +35,10 @@ class CTRATEDataModule(L.LightningDataModule):
             if self.config.train_sample_size > 0:
                 weights = dataset.get_weights_for_sampling(self.config.sample_balance_cols)
                 sampler = WeightedRandomSampler(weights, self.config.train_sample_size, replacement=True)
-        else:
+        elif run_type == "valid":
             batch_size = self.config.val_batch_size
+        elif run_type == "test":
+            batch_size = 1
 
         dataloader = DataLoader(
             dataset,
@@ -58,6 +58,9 @@ class CTRATEDataModule(L.LightningDataModule):
     def val_dataloader(self):
         return self.create_dataloader("valid")
 
+    def test_dataloader(self):
+        return self.create_dataloader("test")
+
 
 class CTRATEDataset(PersistentDataset):
     def __init__(self, config, run_type):
@@ -69,15 +72,20 @@ class CTRATEDataset(PersistentDataset):
 
         if run_type == "train":
             self.transforms = Compose([self.load_image_transform, instantiate(self.config.train_augmentations)])
-        else:
+            cache_dir = None  # no point caching as most is random
+        elif run_type == "valid":
             self.transforms = Compose([self.load_image_transform, instantiate(self.config.val_augmentations)])
+            # cache_dir = f"/raid/arjun/training_cache/ct_rate/valid"  # raid10
+            cache_dir = None
+        elif run_type == "test":
+            self.transforms = Compose([self.load_image_transform, instantiate(self.config.test_augmentations)])
+            cache_dir = None
         self.transforms = self.transforms.flatten()
 
         # Load all data, perform checks, filter, and finalize
         self.load_csv()
-        if self.run_type != "custom":
-            self.sample_dataset()
-            self.perform_checks()
+        self.sample_dataset()
+        self.perform_checks()
         self.finalize_data()
 
         print(f"No. of {run_type} datapoints: {len(self.data)}")
@@ -85,8 +93,7 @@ class CTRATEDataset(PersistentDataset):
         super().__init__(
             data=self.data,
             transform=self.transforms,
-            # cache_dir="/raid3/arjun/training_cache/ct_rate",
-            cache_dir=None,
+            cache_dir=cache_dir,
         )
 
         # ClearML Log
@@ -117,11 +124,14 @@ class CTRATEDataset(PersistentDataset):
         self.dataset.Shape = self.dataset.Shape.apply(ast.literal_eval)
         self.dataset.Spacing = self.dataset.Spacing.apply(ast.literal_eval)
 
+        self.dataset["SliceThickness"] = self.dataset.Spacing.str[0]
+
     def sample_dataset(self):
         study_uids = self.dataset.StudyUID.drop_duplicates()
         train_study_uids, valid_study_uids = train_test_split(
             study_uids,
-            train_size=0.95,
+            # train_size=0.95,
+            test_size=500,
             random_state=42,
         )
         train = self.dataset[self.dataset.StudyUID.isin(train_study_uids)]
@@ -129,10 +139,10 @@ class CTRATEDataset(PersistentDataset):
 
         if self.run_type == "train":
             self.dataset = train
-        elif self.run_type == "valid":
+        elif self.run_type == "valid" or self.run_type == "test":
+            valid = valid.sort_values("SliceThickness")
+            valid = valid.drop_duplicates(subset=["StudyUID"], keep="first")
             self.dataset = valid
-        elif self.run_type == "custom":
-            pass
         elif self.run_type == "all":
             pass
         else:
@@ -187,23 +197,6 @@ class CTRATEDataset(PersistentDataset):
 
         self.dataset = self.dataset.dropna(subset=["image"])
 
-    # def augment(self, scan, spacing, i, augmentations):
-    #     other = self.dataset.loc[i]
-
-    #     for augmentation in augmentations:
-    #         if isinstance(augmentation, list):
-    #             probabilities = augmentation[0]
-    #             chosen_path_index = random.choices(
-    #                 population=list(range(1, len(probabilities) + 1)), weights=probabilities, k=1
-    #             )[0]
-    #             chosen_path = augmentation[chosen_path_index]
-    #             scan, spacing = self.augment(scan, spacing, i, chosen_path)
-    #         else:
-    #             augmentation_fn = getattr(all_augmentations, augmentation.__fn_name__)
-    #             scan, spacing = augmentation_fn(scan, spacing, augmentation, other)
-
-    #     return scan, spacing
-
     def finalize_data(self):
         self.data = self.dataset.to_dict(orient="records")
 
@@ -231,7 +224,10 @@ if __name__ == "__main__":
     cfg = get_config()
 
     dataset = CTRATEDataset(cfg.data, "train")
-    print(dataset[0]["image"].shape)
+    print(dataset[0][0]["image"].shape)
 
     dataset = CTRATEDataset(cfg.data, "valid")
+    print(dataset[0][0]["image"].shape)
+
+    dataset = CTRATEDataset(cfg.data, "test")
     print(dataset[0]["image"].shape)

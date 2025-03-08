@@ -8,6 +8,7 @@ from diffusion_3d.utils.environment import set_multi_node_environment
 
 
 def get_config():
+    minimum_input_size = (32, 128, 128)
     training_image_size = (96, 96, 96)
     model_config = {
         "swin": SwinV23DConfig.model_validate(
@@ -69,7 +70,7 @@ def get_config():
         {
             "encode": {
                 "dim": model_config["swin"].stages[-1].out_dim,
-                "num_latent_tokens": 1024,
+                "num_latent_tokens": 256,
                 "num_layers": 2,
                 "num_heads": 16,
                 "attn_drop_prob": 0.1,
@@ -156,16 +157,36 @@ def get_config():
         "out_channels": model_config["swin"].in_channels,
     }
 
-    training_latent_shape = model_config["swin"].patch_size
+    latent_patch_size = model_config["swin"].patch_size
     for stage in model_config["swin"].stages:
-        training_latent_shape = stage.get_out_patch_size(training_latent_shape)
-    compression_factor = tuple(training_image_size[i] / training_latent_shape[i] for i in range(3))
-
-    transformsd_keys = ["image"]
+        latent_patch_size = stage.get_out_patch_size(latent_patch_size)
+    # latent_patch_size = (96, 96, 96)
+    training_latent_grid_size = tuple(size // patch for size, patch in zip(training_image_size, latent_patch_size))
+    compression_factor = tuple(training_image_size[i] // training_latent_grid_size[i] for i in range(3))
 
     batch_size = 20
     num_train_samples_per_datapoint = 5
-    num_val_samples_per_datapoint = batch_size
+    num_val_samples_per_datapoint = 20
+
+    transformsd_keys = ["image"]
+
+    clipping_transform = {
+        "_target_": "monai.transforms.ScaleIntensityRanged",
+        "keys": transformsd_keys,
+        "a_min": -1.0,
+        "a_max": 1.0,
+        "b_min": -1.0,
+        "b_max": 1.0,
+        "clip": True,
+    }
+
+    def compose_with_clipping_tranform(transforms):
+        if isinstance(transforms, dict):
+            transforms = [transforms]
+        return {
+            "_target_": "monai.transforms.Compose",
+            "transforms": [*transforms, clipping_transform],
+        }
 
     data_config = munchify(
         dict(
@@ -185,7 +206,15 @@ def get_config():
                         "_target_": "monai.transforms.CropForegroundd",
                         "keys": transformsd_keys,
                         "source_key": transformsd_keys[0],
+                        "allow_smaller": True,
                     },
+                    # {
+                    #     "_target_": "monai.transforms.Resized",
+                    #     "keys": transformsd_keys,
+                    #     "spatial_size": (-1, 256, 256),
+                    #     "mode": "trilinear",
+                    #     "anti_aliasing": True,
+                    # },
                     {
                         "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
                         "keys": transformsd_keys,
@@ -222,8 +251,8 @@ def get_config():
                     {
                         "_target_": "monai.transforms.RandSpatialCropSamplesd",
                         "keys": transformsd_keys,
-                        "roi_size": training_image_size,
-                        "max_roi_size": tuple(int(size * 2.0) for size in training_image_size),
+                        "roi_size": tuple(int(size * 0.8) for size in training_image_size),
+                        "max_roi_size": tuple(int(size * 1.2) for size in training_image_size),
                         "random_size": True,
                         "num_samples": num_train_samples_per_datapoint,
                     },
@@ -234,6 +263,7 @@ def get_config():
                         "mode": "trilinear",
                         "anti_aliasing": True,
                     },
+                    clipping_transform,
                     {
                         "_target_": "monai.transforms.RandomOrder",
                         "transforms": [
@@ -242,34 +272,42 @@ def get_config():
                                 "keys": transformsd_keys,
                                 "prob": 0.5,
                             },
-                            {
-                                "_target_": "monai.transforms.RandKSpaceSpikeNoised",
-                                "keys": transformsd_keys,
-                                "intensity_range": (12, 18),
-                                "prob": 0.1,
-                            },
+                            compose_with_clipping_tranform(
+                                {
+                                    "_target_": "monai.transforms.RandKSpaceSpikeNoised",
+                                    "keys": transformsd_keys,
+                                    "prob": 0.1,
+                                }
+                            ),
                             {
                                 "_target_": "monai.transforms.OneOf",
                                 "transforms": [
-                                    {
-                                        "_target_": "monai.transforms.RandGaussianNoised",
-                                        "keys": transformsd_keys,
-                                        "prob": 0.75,
-                                    },
-                                    {
-                                        "_target_": "monai.transforms.RandGaussianSmoothd",
-                                        "keys": transformsd_keys,
-                                        "prob": 0.75,
-                                    },
-                                    {
-                                        "_target_": "monai.transforms.RandGaussianSharpend",
-                                        "keys": transformsd_keys,
-                                        "prob": 0.75,
-                                    },
+                                    compose_with_clipping_tranform(
+                                        {
+                                            "_target_": "monai.transforms.RandGaussianNoised",
+                                            "keys": transformsd_keys,
+                                            "prob": 0.75,
+                                        }
+                                    ),
+                                    compose_with_clipping_tranform(
+                                        {
+                                            "_target_": "monai.transforms.RandGaussianSmoothd",
+                                            "keys": transformsd_keys,
+                                            "prob": 0.75,
+                                        }
+                                    ),
+                                    compose_with_clipping_tranform(
+                                        {
+                                            "_target_": "monai.transforms.RandGaussianSharpend",
+                                            "keys": transformsd_keys,
+                                            "prob": 0.75,
+                                        }
+                                    ),
                                 ],
                             },
                         ],
                     },
+                    clipping_transform,
                 ],
             },
             val_augmentations={
@@ -279,6 +317,55 @@ def get_config():
                         "_target_": "monai.transforms.CropForegroundd",
                         "keys": transformsd_keys,
                         "source_key": transformsd_keys[0],
+                        "allow_smaller": True,
+                    },
+                    # {
+                    #     "_target_": "monai.transforms.Resized",
+                    #     "keys": transformsd_keys,
+                    #     "spatial_size": (-1, 256, 256),
+                    #     "mode": "trilinear",
+                    #     "anti_aliasing": True,
+                    # },
+                    {
+                        "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
+                        "keys": transformsd_keys,
+                        "a_min": -1000,
+                        "a_max": 2000,
+                        "b_min": -1.0,
+                        "b_max": 1.0,
+                        "clip": True,
+                    },
+                    # {
+                    #     "_target_": "monai.transforms.SpatialPadd",
+                    #     "keys": transformsd_keys,
+                    #     "spatial_size": minimum_input_size,
+                    #     "mode": "constant",
+                    #     "value": -1,
+                    # },
+                    # {
+                    #     "_target_": "monai.transforms.DivisiblePadd",
+                    #     "keys": transformsd_keys,
+                    #     "k": latent_patch_size,
+                    #     "mode": "constant",
+                    #     "value": -1,
+                    # },
+                    {
+                        "_target_": "monai.transforms.RandSpatialCropSamplesd",
+                        "keys": transformsd_keys,
+                        "roi_size": training_image_size,
+                        "num_samples": num_val_samples_per_datapoint,
+                    },
+                    clipping_transform,
+                ],
+            },
+            test_augmentations={
+                "_target_": "monai.transforms.Compose",
+                "transforms": [
+                    {
+                        "_target_": "monai.transforms.CropForegroundd",
+                        "keys": transformsd_keys,
+                        "source_key": transformsd_keys[0],
+                        "allow_smaller": True,
                     },
                     {
                         "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
@@ -292,22 +379,16 @@ def get_config():
                     {
                         "_target_": "monai.transforms.SpatialPadd",
                         "keys": transformsd_keys,
-                        "spatial_size": training_image_size,
+                        "spatial_size": minimum_input_size,
                         "mode": "constant",
                         "value": -1,
                     },
                     {
                         "_target_": "monai.transforms.DivisiblePadd",
                         "keys": transformsd_keys,
-                        "k": training_latent_shape,
+                        "k": latent_patch_size,
                         "mode": "constant",
                         "value": -1,
-                    },
-                    {
-                        "_target_": "monai.transforms.RandSpatialCropSamplesd",
-                        "keys": transformsd_keys,
-                        "roi_size": training_image_size,
-                        "num_samples": num_val_samples_per_datapoint,
                     },
                 ],
             },
@@ -315,7 +396,7 @@ def get_config():
             num_workers=16,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
-            train_sample_size=4_000,
+            train_sample_size=2_000,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -337,8 +418,12 @@ def get_config():
                 "kl_loss": 1e-4,
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_epochs=30,
+            kl_annealing_start_epoch=0,
+            kl_annealing_epochs=50,
             # free_bits=1.0,
+            #
+            pathway_drop_prob=0.1,
+            residual_connection_epochs=50,
             #
             checkpointing_level=2,
             #
@@ -371,14 +456,18 @@ def get_config():
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Added adaptor architecture",
-        "Updated augmentations",
-        "Added activation checkpointing",
+        "Added back checkpointing for larger batch size",
+        "Removed perceiver to see if model can reconstruct",
+        "Moved beta annealing to sigmoid scheduler",
+        "Fixed data loading issue",
+        # "Added gradient flow stabilizers",
+        # "Added residual connection skipping the perceiver with annealing",
+        # "Resized input images to (256, 256) before cropping",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v25__2025_03_06",
+            task_name="v27__2025_03_07",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
