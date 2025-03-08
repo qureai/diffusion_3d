@@ -192,7 +192,11 @@ class AdaptiveVAELightning(L.LightningModule):
     def calculate_autoencoder_loss(self, all_losses):
         # Apply beta annealing
         if not self.kl_beta_scheduler.is_ready():
-            steps_per_epoch = self.trainer.estimated_stepping_batches // self.trainer.max_epochs
+            steps_per_epoch = (
+                self.trainer.estimated_stepping_batches
+                * self.trainer.accumulate_grad_batches
+                // self.trainer.max_epochs
+            )
             kl_annealing_epochs = self.training_config.kl_annealing_epochs
             kl_annealing_steps = kl_annealing_epochs * steps_per_epoch
             self.kl_beta_scheduler.set_num_steps(kl_annealing_steps)
@@ -200,11 +204,13 @@ class AdaptiveVAELightning(L.LightningModule):
         kl_beta = 0.0
         if self.current_epoch >= self.training_config.kl_annealing_start_epoch:
             kl_beta = self.kl_beta_scheduler.get()
-            self.kl_beta_scheduler.step()
+            if self.training:
+                self.kl_beta_scheduler.step()
         all_losses["kl_loss"] = kl_beta * all_losses["kl_loss"]
         # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
 
-        self.log("train_kl_step/beta", kl_beta, sync_dist=True, on_step=True)
+        if self.training:
+            self.log("train_kl_step/beta", kl_beta, sync_dist=True, on_step=True, on_epoch=False)
 
         all_losses["autoencoder_loss"] = (
             self.training_config.loss_weights["reconstruction_loss"] * all_losses["reconstruction_loss"]
@@ -307,13 +313,13 @@ class AdaptiveVAELightning(L.LightningModule):
         numbers = self.trainer.logged_metrics
         numbers = list(numbers.items())
         for i in range(len(numbers)):
-            numbers[i] = [*numbers[0].split("/"), round(float(numbers[1]), 5)]
+            numbers[i] = [*numbers[i][0].split("/"), round(float(numbers[i][1]), 5)]
         numbers = sorted(numbers)
 
         print()
         print()
         print("Epoch = {:<4}".format(self.current_epoch))
-        table = PrettyTable(["Metric", "Value"])
+        table = PrettyTable(["Header", "Metric", "Value"])
         table.add_rows(numbers)
         print(table)
         print()
@@ -323,10 +329,23 @@ class AdaptiveVAELightning(L.LightningModule):
 
         residual_connection = self.autoencoder.residual_connection
         if not residual_connection.weight_scheduler.is_ready():
-            steps_per_epoch = self.trainer.estimated_stepping_batches // self.trainer.max_epochs
+            steps_per_epoch = (
+                self.trainer.estimated_stepping_batches
+                * self.trainer.accumulate_grad_batches
+                // self.trainer.max_epochs
+            )
             residual_connection_epochs = self.training_config.residual_connection_epochs
             residual_connection_steps = residual_connection_epochs * steps_per_epoch
             residual_connection.set_num_steps(residual_connection_steps)
+
+        if run_type == "train":
+            self.log(
+                "train_kl_step/residual_connection_weight",
+                residual_connection.weight_scheduler.get(),
+                sync_dist=True,
+                on_step=True,
+                on_epoch=False,
+            )
 
         return self.autoencoder(x, run_type)
 

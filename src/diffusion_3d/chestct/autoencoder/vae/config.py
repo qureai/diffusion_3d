@@ -10,6 +10,13 @@ from diffusion_3d.utils.environment import set_multi_node_environment
 def get_config():
     minimum_input_size = (32, 128, 128)
     training_image_size = (96, 96, 96)
+    window_sizes = [
+        (4, 4, 4),
+        (4, 4, 4),
+        (4, 4, 4),
+        (6, 6, 6),
+        # (4, 4, 4),
+    ]
     model_config = {
         "swin": SwinV23DConfig.model_validate(
             {
@@ -21,10 +28,11 @@ def get_config():
                     {
                         "depth": 2,
                         "num_heads": 8,
-                        "window_size": (4, 4, 4),
+                        "window_size": window_sizes[0],
                         "attn_drop_prob": 0.1,
                         "proj_drop_prob": 0.1,
                         "mlp_drop_prob": 0.1,
+                        "max_attention_batch_size": 2**12,
                     },
                     {
                         "patch_merging": {
@@ -33,10 +41,11 @@ def get_config():
                         },
                         "depth": 2,
                         "num_heads": 8,
-                        "window_size": (4, 4, 4),
+                        "window_size": window_sizes[1],
                         "attn_drop_prob": 0.1,
                         "proj_drop_prob": 0.1,
                         "mlp_drop_prob": 0.1,
+                        "max_attention_batch_size": 2**12,
                     },
                     {
                         "patch_merging": {
@@ -45,10 +54,11 @@ def get_config():
                         },
                         "depth": 4,
                         "num_heads": 16,
-                        "window_size": (4, 4, 4),
+                        "window_size": window_sizes[2],
                         "attn_drop_prob": 0.1,
                         "proj_drop_prob": 0.1,
                         "mlp_drop_prob": 0.1,
+                        "max_attention_batch_size": 2**12,
                     },
                     {
                         "patch_merging": {
@@ -57,10 +67,11 @@ def get_config():
                         },
                         "depth": 2,
                         "num_heads": 16,
-                        "window_size": (6, 6, 6),
+                        "window_size": window_sizes[3],
                         "attn_drop_prob": 0.1,
                         "proj_drop_prob": 0.1,
                         "mlp_drop_prob": 0.1,
+                        "max_attention_batch_size": 2**12,
                     },
                 ],
             }
@@ -70,7 +81,7 @@ def get_config():
         {
             "encode": {
                 "dim": model_config["swin"].stages[-1].out_dim,
-                "num_latent_tokens": 256,
+                "num_latent_tokens": 1024,
                 "num_layers": 2,
                 "num_heads": 16,
                 "attn_drop_prob": 0.1,
@@ -104,10 +115,11 @@ def get_config():
                 {
                     "depth": 2,
                     "num_heads": 16,
-                    "window_size": (6, 6, 6),
+                    "window_size": window_sizes[-1],
                     "attn_drop_prob": 0.1,
                     "proj_drop_prob": 0.1,
                     "mlp_drop_prob": 0.1,
+                    "max_attention_batch_size": 2**12,
                     "patch_splitting": {
                         "final_window_size": (2, 2, 2),
                         "out_dim_ratio": 2,
@@ -116,10 +128,11 @@ def get_config():
                 {
                     "depth": 4,
                     "num_heads": 16,
-                    "window_size": (4, 4, 4),
+                    "window_size": window_sizes[-2],
                     "attn_drop_prob": 0.1,
                     "proj_drop_prob": 0.1,
                     "mlp_drop_prob": 0.1,
+                    "max_attention_batch_size": 2**12,
                     "patch_splitting": {
                         "final_window_size": (2, 2, 2),
                         "out_dim_ratio": 2,
@@ -128,10 +141,11 @@ def get_config():
                 {
                     "depth": 2,
                     "num_heads": 8,
-                    "window_size": (4, 4, 4),
+                    "window_size": window_sizes[-3],
                     "attn_drop_prob": 0.1,
                     "proj_drop_prob": 0.1,
                     "mlp_drop_prob": 0.1,
+                    "max_attention_batch_size": 2**12,
                     "patch_splitting": {
                         "final_window_size": (2, 2, 2),
                         "out_dim_ratio": 2,
@@ -140,10 +154,11 @@ def get_config():
                 {
                     "depth": 2,
                     "num_heads": 4,
-                    "window_size": (4, 4, 4),
+                    "window_size": window_sizes[-4],
                     "attn_drop_prob": 0.1,
                     "proj_drop_prob": 0.1,
                     "mlp_drop_prob": 0.1,
+                    "max_attention_batch_size": 2**12,
                 },
             ],
         }
@@ -156,11 +171,12 @@ def get_config():
         "in_channels": model_config["decoder"].stages[-1].out_dim,
         "out_channels": model_config["swin"].in_channels,
     }
+    model_config["pathway_drop_prob"] = 0.1
 
     latent_patch_size = model_config["swin"].patch_size
     for stage in model_config["swin"].stages:
         latent_patch_size = stage.get_out_patch_size(latent_patch_size)
-    # latent_patch_size = (96, 96, 96)
+    # latent_patch_size = (64, 64, 64)
     training_latent_grid_size = tuple(size // patch for size, patch in zip(training_image_size, latent_patch_size))
     compression_factor = tuple(training_image_size[i] // training_latent_grid_size[i] for i in range(3))
 
@@ -403,8 +419,8 @@ def get_config():
 
     training_config = munchify(
         dict(
-            start_from_checkpoint=None,
-            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v1__2025_02_13/version_0/checkpoints/last.ckpt",
+            # start_from_checkpoint=None,
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v27__2025_03_07/version_0/checkpoints/last.ckpt",
             #
             max_epochs=200,
             lr=5e-4,
@@ -418,11 +434,10 @@ def get_config():
                 "kl_loss": 1e-4,
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=0,
-            kl_annealing_epochs=50,
+            kl_annealing_start_epoch=25,
+            kl_annealing_epochs=30,
             # free_bits=1.0,
             #
-            pathway_drop_prob=0.1,
             residual_connection_epochs=50,
             #
             checkpointing_level=2,
@@ -456,18 +471,15 @@ def get_config():
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Added back checkpointing for larger batch size",
-        "Removed perceiver to see if model can reconstruct",
-        "Moved beta annealing to sigmoid scheduler",
-        "Fixed data loading issue",
-        # "Added gradient flow stabilizers",
-        # "Added residual connection skipping the perceiver with annealing",
+        "Added sigmoid scheduler to kl and resuidual connection",
+        "Added gradient flow stabilizers",
+        "Added residual connection skipping the perceiver with annealing",
         # "Resized input images to (256, 256) before cropping",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v27__2025_03_07",
+            task_name="v28__2025_03_08__v27",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

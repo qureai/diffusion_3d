@@ -1,5 +1,4 @@
 import math
-import random
 
 import torch
 from einops import rearrange
@@ -88,11 +87,24 @@ class AdaptorResidualConnection(nn.Module):
 
     def forward(self, swin_encoder_output, perceiver_decoder_output):
         perceiver_weight = self.weight_scheduler.get()
-        self.weight_scheduler.step()
-        if random.random() < self.pathway_drop_prob:
-            perceiver_weight = random.choice(
-                [self.weight_scheduler._sigmoid(-100), self.weight_scheduler._sigmoid(100)]
-            )
+        if self.training:
+            self.weight_scheduler.step()
+
+        device = swin_encoder_output.device
+        b = swin_encoder_output.shape[0]
+        perceiver_weight: torch.Tensor = torch.full((b, 1, 1, 1, 1), perceiver_weight, device=device)
+        if self.training and self.pathway_drop_prob > 0:
+            dropout_mask = (torch.rand_like(perceiver_weight) < self.pathway_drop_prob) * 1
+
+            if dropout_mask.any():
+                dropped_weight_choices = torch.tensor(
+                    [self.weight_scheduler._sigmoid(-10), self.weight_scheduler._sigmoid(10)], device=device
+                )
+                dropped_weight_mask = torch.randint_like(dropout_mask, low=0, high=2)
+                dropped_weight = dropped_weight_choices[dropped_weight_mask]
+
+                perceiver_weight = perceiver_weight * (1 - dropout_mask) + dropped_weight * dropout_mask
+
         swin_weight = 1 - perceiver_weight
 
         output = swin_weight * swin_encoder_output + perceiver_weight * perceiver_decoder_output
@@ -181,33 +193,33 @@ class AdaptiveVAE(nn.Module):
 
         latent_channels = model_config.adaptor.dim
 
-        # input_channel_mapping_config = Perceiver3DChannelMappingConfig(
-        #     in_channels={stage.dim for stage in model_config.swin.stages},
-        #     out_channels=latent_channels,
-        # )
-        # input_channel_mapping = Perceiver3DChannelMapping(input_channel_mapping_config)
-        # decode_position_embeddings = AbsolutePositionEmbeddings3D(dim=latent_channels)
+        input_channel_mapping_config = Perceiver3DChannelMappingConfig(
+            in_channels={stage.dim for stage in model_config.swin.stages},
+            out_channels=latent_channels,
+        )
+        input_channel_mapping = Perceiver3DChannelMapping(input_channel_mapping_config)
+        decode_position_embeddings = AbsolutePositionEmbeddings3D(dim=latent_channels)
 
         self.encoder = SwinV23DModel(model_config.swin, checkpointing_level)
-        # self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)
-        # self.encoder_stabilizer = GradientStabilizer(latent_channels)
-        # self.quant_conv_mu = nn.Linear(latent_channels, latent_channels)
-        # self.quant_conv_log_sigma = nn.Linear(latent_channels, latent_channels)
-        # self.post_quant_conv = nn.Linear(latent_channels, latent_channels)
-        # self.decoder_stabilizer = GradientStabilizer(latent_channels)
-        # self.unadapt = Perceiver3DDecoder(model_config.adaptor, decode_position_embeddings, checkpointing_level)
-        # self.residual_connection = AdaptorResidualConnection(model_config.pathway_drop_prob)
+        self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)
+        self.encoder_stabilizer = GradientStabilizer(latent_channels)
+        self.quant_conv_mu = nn.Linear(latent_channels, latent_channels)
+        self.quant_conv_log_sigma = nn.Linear(latent_channels, latent_channels)
+        self.post_quant_conv = nn.Linear(latent_channels, latent_channels)
+        self.decoder_stabilizer = GradientStabilizer(latent_channels)
+        self.unadapt = Perceiver3DDecoder(model_config.adaptor, decode_position_embeddings, checkpointing_level)
+        self.residual_connection = AdaptorResidualConnection(model_config.pathway_drop_prob)
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
         self.unembedding = UnembeddingLayer(model_config.unembedding)
 
     def encode(self, x: torch.Tensor, return_stage_outputs=False):
         encoded, stage_outputs, _ = self.encoder(x)
-        return encoded, encoded, encoded
+        # return encoded, encoded, encoded
 
         sliding_window, sliding_stride = None, None
-        if not self.training:
-            sliding_window = 2**14
-            sliding_stride = sliding_window // 2
+        # if not self.training:
+        #     sliding_window = 2**14
+        #     sliding_stride = sliding_window // 2
 
         adapted = self.adapt(
             list(reversed(stage_outputs)),  # Show low frequency features first, then show higher frequency features
@@ -232,10 +244,10 @@ class AdaptiveVAE(nn.Module):
         return z_vae
 
     def decode(self, z: torch.Tensor, swin_encoder_output):
-        z = rearrange(z, "b d z y x -> b z y x d")
-        dec, _, _ = self.decoder(z)
-        dec = rearrange(dec, "b z y x d -> b d z y x")
-        return dec
+        # z = rearrange(z, "b d z y x -> b z y x d")
+        # dec, _, _ = self.decoder(z)
+        # dec = rearrange(dec, "b z y x d -> b d z y x")
+        # return dec
 
         z = self.post_quant_conv(z)
 
@@ -246,22 +258,22 @@ class AdaptiveVAE(nn.Module):
 
         decoder_input = self.residual_connection(swin_encoder_output, unadapted)
 
-        unadapted = rearrange(unadapted, "b d z y x -> b z y x d")
-        dec, _, _ = self.decoder(decoder_input)
-        dec = rearrange(dec, "b z y x d -> b d z y x")
+        decoder_input = rearrange(decoder_input, "b d z y x -> b z y x d")
+        decoded, _, _ = self.decoder(decoder_input)
+        decoded = rearrange(decoded, "b z y x d -> b d z y x")
 
-        return dec
+        return decoded
 
     def forward(self, x, run_type="val"):
         # x: (b, d1, z1, y1, x1)
 
         encoded_mu, encoded_sigma, swin_encoder_output = self.encode(x)
-        encoded = encoded_mu
-        # if run_type == "train":
-        #     encoded = self.sampling(encoded_mu, encoded_sigma)
-        # else:
-        #     encoded = encoded_mu
-        # # (b, d2, z2, y2, x2)
+        # encoded = encoded_mu
+        if run_type == "train":
+            encoded = self.sampling(encoded_mu, encoded_sigma)
+        else:
+            encoded = encoded_mu
+        # (b, d2, z2, y2, x2)
 
         decoded = self.decode(encoded, swin_encoder_output)
         # (b, d3, z3, y3, x3)
@@ -286,16 +298,16 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    # device = torch.device("cuda:0")
+    device = torch.device("cuda:0")
 
     autoencoder = AdaptiveVAE(config.model, 2).to(device)
-    # autoencoder.residual_connection.set_num_steps(100)
+    autoencoder.residual_connection.set_num_steps(100)
     print("Encoder:")
     describe_model(autoencoder.encoder)
-    # print("Adapt:")
-    # describe_model(autoencoder.adapt)
-    # print("Unadapt:")
-    # describe_model(autoencoder.unadapt)
+    print("Adapt:")
+    describe_model(autoencoder.adapt)
+    print("Unadapt:")
+    describe_model(autoencoder.unadapt)
     print("Decoder:")
     describe_model(autoencoder.decoder)
     print("Final layer:")
@@ -335,4 +347,5 @@ if __name__ == "__main__":
 
     # losses = autoencoder.training_step({"scan": sample_input, "spacing": ...}, 0)
     # from pprint import pprint
+    # pprint(losses)
     # pprint(losses)

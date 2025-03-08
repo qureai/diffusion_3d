@@ -39,6 +39,7 @@ if config.training.start_from_checkpoint is not None:
         config.training.start_from_checkpoint,
         model_config=config.model,
         training_config=config.training,
+        strict=False,
         map_location="cpu",
     )
     print(f"Started from: {config.training.start_from_checkpoint}")
