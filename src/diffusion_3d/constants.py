@@ -7,6 +7,7 @@ SERVER_MAPPING = {
     "e2ecloud19.e2e.qure.ai": ["10.4.234.24", 2],
     "e2ecloud23.e2e.qure.ai": ["10.4.234.12", 2],
     "e2ecloud25.e2e.qure.ai": ["10.4.234.23", 4],
+    "qrnd8.internal.qure.ai": ["10.67.21.8", 4],
     "qrnd10.internal.qure.ai": ["10.67.21.10", 4],
     "qrnd11.internal.qure.ai": ["10.67.21.11", 4],
 }

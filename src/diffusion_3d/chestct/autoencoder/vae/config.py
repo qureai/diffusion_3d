@@ -219,14 +219,15 @@ def get_config():
                 "_target_": "monai.transforms.Compose",
                 "transforms": [
                     {
-                        "_target_": "monai.transforms.CropForegroundd",
+                        "_target_": "vision_architectures.transforms.croppad.CropForegroundWithCropTrackingd",
                         "keys": transformsd_keys,
                         "source_key": transformsd_keys[0],
                         "allow_smaller": True,
                     },
                     # {
-                    #     "_target_": "monai.transforms.Resized",
+                    #     "_target_": "vision_architectures.transforms.spatial.ResizedWithCropTrackingd",
                     #     "keys": transformsd_keys,
+                    #     "original_shape_key": "Shape",
                     #     "spatial_size": (-1, 256, 256),
                     #     "mode": "trilinear",
                     #     "anti_aliasing": True,
@@ -265,7 +266,7 @@ def get_config():
                     #     ],
                     # },
                     {
-                        "_target_": "monai.transforms.RandSpatialCropSamplesd",
+                        "_target_": "vision_architectures.transforms.croppad.RandSpatialCropSamplesWithCropTrackingd",
                         "keys": transformsd_keys,
                         "roi_size": tuple(int(size * 0.8) for size in training_image_size),
                         "max_roi_size": tuple(int(size * 1.2) for size in training_image_size),
@@ -273,8 +274,9 @@ def get_config():
                         "num_samples": num_train_samples_per_datapoint,
                     },
                     {
-                        "_target_": "monai.transforms.Resized",
+                        "_target_": "vision_architectures.transforms.spatial.ResizedWithCropTrackingd",
                         "keys": transformsd_keys,
+                        "original_shape_key": "Shape",
                         "spatial_size": training_image_size,
                         "mode": "trilinear",
                         "anti_aliasing": True,
@@ -284,8 +286,9 @@ def get_config():
                         "_target_": "monai.transforms.RandomOrder",
                         "transforms": [
                             {
-                                "_target_": "monai.transforms.RandFlipd",
+                                "_target_": "vision_architectures.transforms.spatial.RandFlipWithCropTrackingd",
                                 "keys": transformsd_keys,
+                                "original_shape_key": "Shape",
                                 "prob": 0.5,
                             },
                             compose_with_clipping_tranform(
@@ -330,14 +333,15 @@ def get_config():
                 "_target_": "monai.transforms.Compose",
                 "transforms": [
                     {
-                        "_target_": "monai.transforms.CropForegroundd",
+                        "_target_": "vision_architectures.transforms.croppad.CropForegroundWithCropTrackingd",
                         "keys": transformsd_keys,
                         "source_key": transformsd_keys[0],
                         "allow_smaller": True,
                     },
                     # {
-                    #     "_target_": "monai.transforms.Resized",
+                    #     "_target_": "vision_architectures.transforms.spatial.ResizedWithCropTrackingd",
                     #     "keys": transformsd_keys,
+                    #     "original_shape_key": "Shape",
                     #     "spatial_size": (-1, 256, 256),
                     #     "mode": "trilinear",
                     #     "anti_aliasing": True,
@@ -366,7 +370,7 @@ def get_config():
                     #     "value": -1,
                     # },
                     {
-                        "_target_": "monai.transforms.RandSpatialCropSamplesd",
+                        "_target_": "vision_architectures.transforms.croppad.RandSpatialCropSamplesWithCropTrackingd",
                         "keys": transformsd_keys,
                         "roi_size": training_image_size,
                         "num_samples": num_val_samples_per_datapoint,
@@ -378,7 +382,7 @@ def get_config():
                 "_target_": "monai.transforms.Compose",
                 "transforms": [
                     {
-                        "_target_": "monai.transforms.CropForegroundd",
+                        "_target_": "vision_architectures.transforms.croppad.CropForegroundWithCropTrackingd",
                         "keys": transformsd_keys,
                         "source_key": transformsd_keys[0],
                         "allow_smaller": True,
@@ -429,16 +433,16 @@ def get_config():
             #
             loss_weights={
                 "reconstruction_loss": 1.0,
-                "perceptual_loss": 0.1,
+                "perceptual_loss": 0.2,
                 "ms_ssim_loss": 0.1,
-                "kl_loss": 1e-4,
+                "kl_loss": 5e-6,
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=25,
-            kl_annealing_epochs=30,
+            kl_annealing_start_epoch=20,
+            kl_annealing_epochs=80,
             # free_bits=1.0,
             #
-            residual_connection_epochs=50,
+            residual_connection_epochs=20,
             #
             checkpointing_level=2,
             #
@@ -471,15 +475,19 @@ def get_config():
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Added sigmoid scheduler to kl and resuidual connection",
-        "Added gradient flow stabilizers",
-        "Added residual connection skipping the perceiver with annealing",
+        "Increased perceptual loss weight",
+        "Decreased KL loss weightage",
+        "KL now anneals much more slowly allowing for exploration",
+        "Position embeddings now calculated with crop offset",
+        "Position embeddings added before adaptor",
+        "Residual connection disappears much faster",
+        "Pathway dropout switched to detach gradients",
         # "Resized input images to (256, 256) before cropping",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v28__2025_03_08__v27",
+            task_name="v29__2025_03_10__v27",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
@@ -492,9 +500,8 @@ def get_config():
             nodes=[
                 (node, SERVER_MAPPING[node])
                 for node in [
-                    "e2ecloud16.e2e.qure.ai",  # First one is master node
-                    "e2ecloud14.e2e.qure.ai",
-                    "e2ecloud23.e2e.qure.ai",
+                    "qrnd10.internal.qure.ai",  # First one is master node
+                    "qrnd8.internal.qure.ai",
                 ]
             ],
         )

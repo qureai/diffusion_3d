@@ -220,8 +220,11 @@ class AdaptiveVAELightning(L.LightningModule):
             # + self.training_config.loss_weights["spectral_loss"] * all_losses["spectral_loss"]
         )
 
-    def process_step(self, x, prefix, batch_idx):
-        autoencoder_output = self(x, prefix)
+    def process_step(self, batch, prefix, batch_idx):
+        x = batch["image"]
+        crop_offsets = batch["crop_offset"]
+
+        autoencoder_output = self(x, crop_offsets, prefix)
         reconstructed = autoencoder_output["reconstructed"]
         encoded_mu = autoencoder_output["encoded_mu"]
         encoded_sigma = autoencoder_output["encoded_sigma"]
@@ -280,10 +283,10 @@ class AdaptiveVAELightning(L.LightningModule):
             print(f"Error in logging gradients {norm}, {max_abs}")
 
     def training_step(self, batch, batch_idx):
-        return self.process_step(batch["image"], "train", batch_idx)["all_losses"]["autoencoder_loss"]
+        return self.process_step(batch, "train", batch_idx)["all_losses"]["autoencoder_loss"]
 
     def validation_step(self, batch, batch_idx):
-        return self.process_step(batch["image"], "val", batch_idx)
+        return self.process_step(batch, "val", batch_idx)
 
     def on_train_epoch_end(self):
         # self.process_epoch("train")
@@ -324,11 +327,12 @@ class AdaptiveVAELightning(L.LightningModule):
         print(table)
         print()
 
-    def forward(self, x, run_type="val"):
+    def forward(self, x, crop_offsets, run_type="val"):
         # x: (b, d1, z1, y1, x1)
+        # crop_offsets: (b, 3)
 
         residual_connection = self.autoencoder.residual_connection
-        if not residual_connection.weight_scheduler.is_ready():
+        if self.training and not residual_connection.weight_scheduler.is_ready():
             steps_per_epoch = (
                 self.trainer.estimated_stepping_batches
                 * self.trainer.accumulate_grad_batches
@@ -347,7 +351,7 @@ class AdaptiveVAELightning(L.LightningModule):
                 on_epoch=False,
             )
 
-        return self.autoencoder(x, run_type)
+        return self.autoencoder(x, crop_offsets, run_type)
 
     # def on_before_zero_grad(self, optimizer):
     #     """Will print all unused parameters"""
@@ -366,7 +370,10 @@ if __name__ == "__main__":
 
     autoencoder = AdaptiveVAELightning(config.model, config.training)
 
-    sample_input = torch.zeros((1, 1, *config.image_size))
+    sample_input = {
+        "image": torch.zeros((1, 1, *config.image_size)),
+        "crop_offset": torch.zeros(1, 3),
+    }
     sample_output = autoencoder.process_step(sample_input, "train", 0)
 
     print("Input shape: ", sample_input.shape)

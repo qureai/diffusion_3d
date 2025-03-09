@@ -14,7 +14,7 @@ from vision_architectures.nets.swinv2_3d import SwinV23DDecoder, SwinV23DModel
 
 
 class SigmoidScheduler:
-    def __init__(self, min_y=0.0, max_y=1.0, min_x=-10, max_x=10):
+    def __init__(self, min_y=0.0, max_y=1.0, min_x=-7, max_x=7):
         assert min_x < max_x, "min_x must be less than max_x"
         assert min_y < max_y, "min_y must be less than max_y"
 
@@ -85,7 +85,7 @@ class AdaptorResidualConnection(nn.Module):
     def set_num_steps(self, num_steps):
         self.weight_scheduler.set_num_steps(num_steps)
 
-    def forward(self, swin_encoder_output, perceiver_decoder_output):
+    def forward(self, swin_encoder_output: torch.Tensor, perceiver_decoder_output):
         perceiver_weight = self.weight_scheduler.get()
         if self.training:
             self.weight_scheduler.step()
@@ -93,17 +93,21 @@ class AdaptorResidualConnection(nn.Module):
         device = swin_encoder_output.device
         b = swin_encoder_output.shape[0]
         perceiver_weight: torch.Tensor = torch.full((b, 1, 1, 1, 1), perceiver_weight, device=device)
+
+        # Implement dropout
         if self.training and self.pathway_drop_prob > 0:
-            dropout_mask = (torch.rand_like(perceiver_weight) < self.pathway_drop_prob) * 1
-
+            dropout_mask = torch.rand_like(perceiver_weight) < self.pathway_drop_prob
             if dropout_mask.any():
-                dropped_weight_choices = torch.tensor(
-                    [self.weight_scheduler._sigmoid(-10), self.weight_scheduler._sigmoid(10)], device=device
-                )
-                dropped_weight_mask = torch.randint_like(dropout_mask, low=0, high=2)
-                dropped_weight = dropped_weight_choices[dropped_weight_mask]
+                swin_encoder_output[dropout_mask.squeeze()] = swin_encoder_output[dropout_mask.squeeze()].detach()
 
-                perceiver_weight = perceiver_weight * (1 - dropout_mask) + dropped_weight * dropout_mask
+            # if dropout_mask.any():
+            #     dropped_weight_choices = torch.tensor(
+            #         [self.weight_scheduler._sigmoid(-10), self.weight_scheduler._sigmoid(10)], device=device
+            #     )
+            #     dropped_weight_mask = torch.randint_like(dropout_mask, low=0, high=2)
+            #     dropped_weight = dropped_weight_choices[dropped_weight_mask]
+
+            #     perceiver_weight = perceiver_weight * (1 - dropout_mask) + dropped_weight * dropout_mask
 
         swin_weight = 1 - perceiver_weight
 
@@ -198,22 +202,23 @@ class AdaptiveVAE(nn.Module):
             out_channels=latent_channels,
         )
         input_channel_mapping = Perceiver3DChannelMapping(input_channel_mapping_config)
-        decode_position_embeddings = AbsolutePositionEmbeddings3D(dim=latent_channels)
+        perceiver_position_embeddings = AbsolutePositionEmbeddings3D()
 
         self.encoder = SwinV23DModel(model_config.swin, checkpointing_level)
+        self.perceiver_position_embeddings = perceiver_position_embeddings
         self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)
         self.encoder_stabilizer = GradientStabilizer(latent_channels)
         self.quant_conv_mu = nn.Linear(latent_channels, latent_channels)
         self.quant_conv_log_sigma = nn.Linear(latent_channels, latent_channels)
         self.post_quant_conv = nn.Linear(latent_channels, latent_channels)
         self.decoder_stabilizer = GradientStabilizer(latent_channels)
-        self.unadapt = Perceiver3DDecoder(model_config.adaptor, decode_position_embeddings, checkpointing_level)
+        self.unadapt = Perceiver3DDecoder(model_config.adaptor, perceiver_position_embeddings, checkpointing_level)
         self.residual_connection = AdaptorResidualConnection(model_config.pathway_drop_prob)
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
         self.unembedding = UnembeddingLayer(model_config.unembedding)
 
-    def encode(self, x: torch.Tensor, return_stage_outputs=False):
-        encoded, stage_outputs, _ = self.encoder(x)
+    def encode(self, x: torch.Tensor, crop_offsets: torch.Tensor = None, return_stage_outputs=False):
+        encoded, stage_outputs, _ = self.encoder(x, crop_offsets=crop_offsets)
         # return encoded, encoded, encoded
 
         sliding_window, sliding_stride = None, None
@@ -221,8 +226,29 @@ class AdaptiveVAE(nn.Module):
         #     sliding_window = 2**14
         #     sliding_stride = sliding_window // 2
 
+        scaled_crop_offsets = []
+        cur_crop_offset = crop_offsets.clone()
+        for stage_config in self.model_config.swin.stages:
+            scaled_crop_offsets.append(
+                cur_crop_offset // torch.tensor(stage_config.spatial_compression_ratio, device=cur_crop_offset.device)
+            )
+            cur_crop_offset = scaled_crop_offsets[-1].clone()
+
+        embedded_stage_outputs: list[torch.Tensor] = []
+        for stage_output, scaled_crop_offset in zip(stage_outputs, scaled_crop_offsets):
+            embedded_stage_output = stage_output + self.perceiver_position_embeddings(
+                batch_size=stage_output.shape[0],
+                dim=stage_output.shape[1],
+                grid_size=stage_output.shape[2:],
+                device=stage_output.device,
+                crop_offsets=scaled_crop_offset,
+            )
+            embedded_stage_outputs.append(embedded_stage_output)
+
         adapted = self.adapt(
-            list(reversed(stage_outputs)),  # Show low frequency features first, then show higher frequency features
+            list(
+                reversed(embedded_stage_outputs)
+            ),  # Show low frequency features first, then show higher frequency features
             sliding_window=sliding_window,
             sliding_stride=sliding_stride,
         )
@@ -235,15 +261,15 @@ class AdaptiveVAE(nn.Module):
         z_sigma = torch.exp(z_log_var / 2)
 
         if return_stage_outputs:
-            return z_mu, z_sigma, encoded, stage_outputs
-        return z_mu, z_sigma, encoded
+            return z_mu, z_sigma, encoded, scaled_crop_offsets, stage_outputs
+        return z_mu, z_sigma, encoded, scaled_crop_offsets
 
     def sampling(self, z_mu: torch.Tensor, z_sigma: torch.Tensor) -> torch.Tensor:
         eps = torch.randn_like(z_sigma)
         z_vae = z_mu + eps * z_sigma
         return z_vae
 
-    def decode(self, z: torch.Tensor, swin_encoder_output):
+    def decode(self, z: torch.Tensor, swin_encoder_output, scaled_crop_offsets):
         # z = rearrange(z, "b d z y x -> b z y x d")
         # dec, _, _ = self.decoder(z)
         # dec = rearrange(dec, "b z y x d -> b d z y x")
@@ -254,9 +280,12 @@ class AdaptiveVAE(nn.Module):
         z = self.decoder_stabilizer(z)
 
         decoder_in_shape = swin_encoder_output.shape[2:]
-        unadapted = self.unadapt(z, out_shape=decoder_in_shape)
+        unadapted = self.unadapt(z, out_shape=decoder_in_shape, crop_offsets=scaled_crop_offsets[-1])
 
-        decoder_input = self.residual_connection(swin_encoder_output, unadapted)
+        if self.training:
+            decoder_input = self.residual_connection(swin_encoder_output, unadapted)
+        else:
+            decoder_input = unadapted
 
         decoder_input = rearrange(decoder_input, "b d z y x -> b z y x d")
         decoded, _, _ = self.decoder(decoder_input)
@@ -264,10 +293,10 @@ class AdaptiveVAE(nn.Module):
 
         return decoded
 
-    def forward(self, x, run_type="val"):
+    def forward(self, x, crop_offsets, run_type="val"):
         # x: (b, d1, z1, y1, x1)
 
-        encoded_mu, encoded_sigma, swin_encoder_output = self.encode(x)
+        encoded_mu, encoded_sigma, swin_encoder_output, scaled_crop_offsets = self.encode(x, crop_offsets)
         # encoded = encoded_mu
         if run_type == "train":
             encoded = self.sampling(encoded_mu, encoded_sigma)
@@ -275,7 +304,7 @@ class AdaptiveVAE(nn.Module):
             encoded = encoded_mu
         # (b, d2, z2, y2, x2)
 
-        decoded = self.decode(encoded, swin_encoder_output)
+        decoded = self.decode(encoded, swin_encoder_output, scaled_crop_offsets)
         # (b, d3, z3, y3, x3)
 
         reconstructed = self.unembedding(decoded)
@@ -321,9 +350,10 @@ if __name__ == "__main__":
     initial_mem = process.memory_info().rss  # in bytes
 
     sample_input = torch.zeros((1, 1, *config.image_size)).to(device)
+    crop_offsets = torch.Tensor([[0, 0, 0]]).to(device)
 
     tic = perf_counter()
-    sample_output = autoencoder(sample_input, "train")
+    sample_output = autoencoder(sample_input, crop_offsets, "train")
     toc = perf_counter()
     forward_time = toc - tic
 

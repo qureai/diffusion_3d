@@ -140,7 +140,7 @@ class CTRATEDataset(PersistentDataset):
         if self.run_type == "train":
             self.dataset = train
         elif self.run_type == "valid" or self.run_type == "test":
-            valid = valid.sort_values("SliceThickness")
+            # valid = valid.sort_values("SliceThickness")
             valid = valid.drop_duplicates(subset=["StudyUID"], keep="first")
             self.dataset = valid
         elif self.run_type == "all":
