@@ -217,6 +217,13 @@ class AdaptiveVAE(nn.Module):
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
         self.unembedding = UnembeddingLayer(model_config.unembedding)
 
+        nn.init.ones_(self.quant_conv_mu.weight)
+        nn.init.zeros_(self.quant_conv_mu.bias)
+        nn.init.zeros_(self.quant_conv_log_sigma.weight)
+        nn.init.zeros_(self.quant_conv_log_sigma.bias)
+        nn.init.ones_(self.post_quant_conv.weight)
+        nn.init.zeros_(self.post_quant_conv.bias)
+
     def encode(self, x: torch.Tensor, crop_offsets: torch.Tensor = None, return_stage_outputs=False):
         encoded, stage_outputs, _ = self.encoder(x, crop_offsets=crop_offsets)
         # return encoded, encoded, encoded

@@ -296,7 +296,7 @@ class AdaptiveVAELightning(L.LightningModule):
     #     self.process_epoch("val")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.training_config.lr)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.training_config.lr)
 
         total_steps = self.trainer.estimated_stepping_batches
         # scheduler = DecayingSineLR(optimizer, 1e-6, self.training_config.lr, total_steps // 4, 0.5)

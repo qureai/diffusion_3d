@@ -416,7 +416,7 @@ def get_config():
             num_workers=16,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
-            train_sample_size=1_000,
+            train_sample_size=4_000,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -438,8 +438,8 @@ def get_config():
                 "kl_loss": 5e-6,
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=30,
-            kl_annealing_epochs=70,
+            kl_annealing_start_epoch=10,
+            kl_annealing_epochs=50,
             # free_bits=1.0,
             #
             # residual_connection_epochs=50,
@@ -475,15 +475,15 @@ def get_config():
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Removed residual connection",
-        "Training from scratch",
-        "Reduced one epoch to 1000 scans",
+        "Increased one epoch to 4000 scans",
+        "Switched to AdamW",
+        "Init of quant layers to ones and zeros",
         # "Resized input images to (256, 256) before cropping",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v30__2025_03_10",
+            task_name="v31__2025_03_10",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
