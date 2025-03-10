@@ -171,7 +171,7 @@ def get_config():
         "in_channels": model_config["decoder"].stages[-1].out_dim,
         "out_channels": model_config["swin"].in_channels,
     }
-    model_config["pathway_drop_prob"] = 0.1
+    model_config["pathway_drop_prob"] = 0.5
 
     latent_patch_size = model_config["swin"].patch_size
     for stage in model_config["swin"].stages:
@@ -416,15 +416,15 @@ def get_config():
             num_workers=16,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
-            train_sample_size=2_000,
+            train_sample_size=1_000,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
 
     training_config = munchify(
         dict(
-            # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v27__2025_03_07/version_0/checkpoints/last.ckpt",
+            start_from_checkpoint=None,
+            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v27__2025_03_07/version_0/checkpoints/last.ckpt",
             #
             max_epochs=200,
             lr=5e-4,
@@ -438,11 +438,11 @@ def get_config():
                 "kl_loss": 5e-6,
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=20,
-            kl_annealing_epochs=80,
+            kl_annealing_start_epoch=30,
+            kl_annealing_epochs=70,
             # free_bits=1.0,
             #
-            residual_connection_epochs=20,
+            # residual_connection_epochs=50,
             #
             checkpointing_level=2,
             #
@@ -475,19 +475,15 @@ def get_config():
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Increased perceptual loss weight",
-        "Decreased KL loss weightage",
-        "KL now anneals much more slowly allowing for exploration",
-        "Position embeddings now calculated with crop offset",
-        "Position embeddings added before adaptor",
-        "Residual connection disappears much faster",
-        "Pathway dropout switched to detach gradients",
+        "Removed residual connection",
+        "Training from scratch",
+        "Reduced one epoch to 1000 scans",
         # "Resized input images to (256, 256) before cropping",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v29__2025_03_10__v27",
+            task_name="v30__2025_03_10",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

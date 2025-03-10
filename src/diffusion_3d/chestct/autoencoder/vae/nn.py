@@ -282,10 +282,11 @@ class AdaptiveVAE(nn.Module):
         decoder_in_shape = swin_encoder_output.shape[2:]
         unadapted = self.unadapt(z, out_shape=decoder_in_shape, crop_offsets=scaled_crop_offsets[-1])
 
-        if self.training:
-            decoder_input = self.residual_connection(swin_encoder_output, unadapted)
-        else:
-            decoder_input = unadapted
+        decoder_input = unadapted
+        # if self.training:
+        #     decoder_input = self.residual_connection(swin_encoder_output, unadapted)
+        # else:
+        #     decoder_input = unadapted
 
         decoder_input = rearrange(decoder_input, "b d z y x -> b z y x d")
         decoded, _, _ = self.decoder(decoder_input)
