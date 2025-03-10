@@ -68,7 +68,7 @@ class AdaptiveVAELightning(L.LightningModule):
     def calculate_kl_loss(self, z_mu, z_sigma):
         z_mu_squared = z_mu.pow(2)
         z_sigma_squared = z_sigma.pow(2)
-        kl_loss: torch.Tensor = 0.5 * (z_mu_squared + z_sigma_squared - torch.log(z_sigma.pow(2) + 1e-8) - 1)
+        kl_loss: torch.Tensor = 0.5 * (z_mu_squared + z_sigma_squared - torch.log(z_sigma_squared + 1e-8) - 1)
 
         # free_bits_ratio = (kl_loss < self.free_bits_per_channel).sum() / kl_loss.numel()
         # kl_loss = kl_loss.clamp(min=self.free_bits_per_channel)

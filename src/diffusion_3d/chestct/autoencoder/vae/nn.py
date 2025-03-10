@@ -52,7 +52,7 @@ class SigmoidScheduler:
         self.x = min(self.x + self.x_step_size, self.max_x)
 
     def _scale(self, y):
-        scaled_y = (y - self.min_y) / (self.max_y - self.min_y)
+        scaled_y = self.min_y + y * (self.max_y - self.min_y)
         return scaled_y
 
 
