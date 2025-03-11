@@ -15,7 +15,7 @@ from torch.nn import functional as F
 from vision_architectures.layers.embeddings import AbsolutePositionEmbeddings3D
 from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoder, SwinV23DModel
 
-from diffusion_3d.chestct.autoencoder.vae.nn import AdaptiveVAE, SigmoidScheduler
+from diffusion_3d.chestct.autoencoder.vae.swin.nn import AdaptiveVAE, SigmoidScheduler
 
 
 class AdaptiveVAELightning(L.LightningModule):
@@ -296,7 +296,7 @@ class AdaptiveVAELightning(L.LightningModule):
     #     self.process_epoch("val")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.training_config.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.training_config.lr)
 
         total_steps = self.trainer.estimated_stepping_batches
         # scheduler = DecayingSineLR(optimizer, 1e-6, self.training_config.lr, total_steps // 4, 0.5)
@@ -358,7 +358,7 @@ class AdaptiveVAELightning(L.LightningModule):
     #     if self.global_rank == 0:
     #         print("Zero grad params")
     #         for name, param in self.named_parameters():
-    #             if param.grad is None:
+    #             if param.requires_grad and param.grad is None:
     #                 print(name)
     #         print()
 

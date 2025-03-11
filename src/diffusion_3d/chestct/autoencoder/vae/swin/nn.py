@@ -169,13 +169,18 @@ class UnembeddingLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        upsample_fsb_channels = zip([config.in_channels] + config.upsample_channels[:-1], config.upsample_channels)
-        self.upsample_fsbs = nn.ModuleList(
-            [UpsampleLayer(in_channels, out_channels) for in_channels, out_channels in upsample_fsb_channels]
-        )
+        if len(config.upsample_channels) > 0:
+            upsample_fsb_channels = zip([config.in_channels] + config.upsample_channels[:-1], config.upsample_channels)
+            self.upsample_fsbs = nn.ModuleList(
+                [UpsampleLayer(in_channels, out_channels) for in_channels, out_channels in upsample_fsb_channels]
+            )
+            final_in_chanels = config.upsample_channels[-1]
+        else:
+            self.upsample_fsbs = []
+            final_in_chanels = config.in_channels
 
         self.finalize = nn.Sequential(
-            nn.Conv3d(config.upsample_channels[-1], config.out_channels, kernel_size=3, padding=1),
+            nn.Conv3d(final_in_chanels, config.out_channels, kernel_size=3, padding=1),
             nn.Tanh(),
         )
 
@@ -197,8 +202,12 @@ class AdaptiveVAE(nn.Module):
 
         latent_channels = model_config.adaptor.dim
 
+        # input_channel_mapping_config = Perceiver3DChannelMappingConfig(
+        #     in_channels={stage.dim for stage in model_config.swin.stages},
+        #     out_channels=latent_channels,
+        # )
         input_channel_mapping_config = Perceiver3DChannelMappingConfig(
-            in_channels={stage.dim for stage in model_config.swin.stages},
+            in_channels=model_config.swin.stages[-1].dim,
             out_channels=latent_channels,
         )
         input_channel_mapping = Perceiver3DChannelMapping(input_channel_mapping_config)
@@ -217,13 +226,6 @@ class AdaptiveVAE(nn.Module):
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
         self.unembedding = UnembeddingLayer(model_config.unembedding)
 
-        nn.init.ones_(self.quant_conv_mu.weight)
-        nn.init.zeros_(self.quant_conv_mu.bias)
-        nn.init.zeros_(self.quant_conv_log_sigma.weight)
-        nn.init.zeros_(self.quant_conv_log_sigma.bias)
-        nn.init.ones_(self.post_quant_conv.weight)
-        nn.init.zeros_(self.post_quant_conv.bias)
-
     def encode(self, x: torch.Tensor, crop_offsets: torch.Tensor = None, return_stage_outputs=False):
         encoded, stage_outputs, _ = self.encoder(x, crop_offsets=crop_offsets)
         # return encoded, encoded, encoded
@@ -241,21 +243,29 @@ class AdaptiveVAE(nn.Module):
             )
             cur_crop_offset = scaled_crop_offsets[-1].clone()
 
-        embedded_stage_outputs: list[torch.Tensor] = []
-        for stage_output, scaled_crop_offset in zip(stage_outputs, scaled_crop_offsets):
-            embedded_stage_output = stage_output + self.perceiver_position_embeddings(
-                batch_size=stage_output.shape[0],
-                dim=stage_output.shape[1],
-                grid_size=stage_output.shape[2:],
-                device=stage_output.device,
-                crop_offsets=scaled_crop_offset,
-            )
-            embedded_stage_outputs.append(embedded_stage_output)
+        # embedded_stage_outputs: list[torch.Tensor] = []
+        # for stage_output, scaled_crop_offset in zip(stage_outputs, scaled_crop_offsets):
+        #     embedded_stage_output = stage_output + self.perceiver_position_embeddings(
+        #         batch_size=stage_output.shape[0],
+        #         dim=stage_output.shape[1],
+        #         grid_size=stage_output.shape[2:],
+        #         device=stage_output.device,
+        #         crop_offsets=scaled_crop_offset,
+        #     )
+        #     embedded_stage_outputs.append(embedded_stage_output)
+        embedded_encoded = encoded + self.perceiver_position_embeddings(
+            batch_size=encoded.shape[0],
+            dim=encoded.shape[1],
+            grid_size=encoded.shape[2:],
+            device=encoded.device,
+            crop_offsets=scaled_crop_offsets[-1],
+        )
 
         adapted = self.adapt(
-            list(
-                reversed(embedded_stage_outputs)
-            ),  # Show low frequency features first, then show higher frequency features
+            # list(
+            #     reversed(embedded_stage_outputs)
+            # ),  # Show low frequency features first, then show higher frequency features
+            embedded_encoded,
             sliding_window=sliding_window,
             sliding_stride=sliding_stride,
         )
@@ -335,7 +345,7 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    device = torch.device("cuda:0")
+    # device = torch.device("cuda:0")
 
     autoencoder = AdaptiveVAE(config.model, 2).to(device)
     autoencoder.residual_connection.set_num_steps(100)

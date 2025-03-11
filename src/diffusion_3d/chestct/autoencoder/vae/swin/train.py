@@ -8,7 +8,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from munch import munchify
 from neuro_utils.describe import describe_model
 
-from diffusion_3d.chestct.autoencoder.vae.model import AdaptiveVAELightning
+from diffusion_3d.chestct.autoencoder.vae.swin.model import AdaptiveVAELightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
 
 torch.set_float32_matmul_precision("medium")
@@ -103,7 +103,7 @@ trainer = L.Trainer(
     check_val_every_n_epoch=config.training.check_val_every_n_epoch,
     fast_dev_run=config.training.fast_dev_run,
     log_every_n_steps=1,
-    accumulate_grad_batches=config.training.accumulate_grad_batches,
+    accumulate_grad_batches=config.training.accumulate_grad_batches if not config.training.fast_dev_run else 1,
     strategy=config.training.strategy,
     gradient_clip_val=config.training.gradient_clip_val,
     devices=devices,

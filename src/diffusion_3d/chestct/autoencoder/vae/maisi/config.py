@@ -1,182 +1,90 @@
 import torch
 from munch import munchify
 from vision_architectures.nets.perceiver_3d import Perceiver3DConfig
-from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoderConfig
 
 from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
 
 
 def get_config():
-    minimum_input_size = (32, 128, 128)
-    training_image_size = (96, 96, 96)
-    window_sizes = [
-        (4, 4, 4),
-        (4, 4, 4),
-        (4, 4, 4),
-        (6, 6, 6),
-        # (4, 4, 4),
-    ]
+    # minimum_input_size = (32, 128, 128)
+    training_image_size = (64, 64, 64)
     model_config = {
-        "swin": SwinV23DConfig.model_validate(
-            {
-                "patch_size": (2, 2, 2),
-                "in_channels": 1,
-                "dim": 24,
-                "drop_prob": 0.1,
-                "stages": [
-                    {
-                        "depth": 2,
-                        "num_heads": 8,
-                        "window_size": window_sizes[0],
-                        "attn_drop_prob": 0.1,
-                        "proj_drop_prob": 0.1,
-                        "mlp_drop_prob": 0.1,
-                        "max_attention_batch_size": 2**12,
-                    },
-                    {
-                        "patch_merging": {
-                            "merge_window_size": (2, 2, 2),
-                            "out_dim_ratio": 2,
-                        },
-                        "depth": 2,
-                        "num_heads": 8,
-                        "window_size": window_sizes[1],
-                        "attn_drop_prob": 0.1,
-                        "proj_drop_prob": 0.1,
-                        "mlp_drop_prob": 0.1,
-                        "max_attention_batch_size": 2**12,
-                    },
-                    {
-                        "patch_merging": {
-                            "merge_window_size": (2, 2, 2),
-                            "out_dim_ratio": 2,
-                        },
-                        "depth": 4,
-                        "num_heads": 16,
-                        "window_size": window_sizes[2],
-                        "attn_drop_prob": 0.1,
-                        "proj_drop_prob": 0.1,
-                        "mlp_drop_prob": 0.1,
-                        "max_attention_batch_size": 2**12,
-                    },
-                    {
-                        "patch_merging": {
-                            "merge_window_size": (2, 2, 2),
-                            "out_dim_ratio": 2,
-                        },
-                        "depth": 2,
-                        "num_heads": 16,
-                        "window_size": window_sizes[3],
-                        "attn_drop_prob": 0.1,
-                        "proj_drop_prob": 0.1,
-                        "mlp_drop_prob": 0.1,
-                        "max_attention_batch_size": 2**12,
-                    },
-                ],
-            }
-        )
+        "encoder": {
+            "_target_": "monai.apps.generation.maisi.networks.autoencoderkl_maisi.MaisiEncoder",
+            "spatial_dims": 3,
+            "in_channels": 1,
+            "num_channels": [64, 128, 256],
+            "out_channels": 4,
+            "num_res_blocks": [2, 2, 2],
+            "norm_num_groups": 32,
+            "norm_eps": 1e-06,
+            "attention_levels": [False, False, False],
+            "with_nonlocal_attn": False,
+            "include_fc": False,
+            "use_combined_linear": False,
+            "use_flash_attention": False,
+            "num_splits": 2,
+            "dim_split": 1,
+            "print_info": False,
+            "save_mem": True,
+        },
     }
     model_config["adaptor"] = Perceiver3DConfig.model_validate(
         {
             "encode": {
-                "dim": model_config["swin"].stages[-1].out_dim,
+                "dim": model_config["encoder"]["out_channels"],
                 "num_latent_tokens": 1024,
                 "num_layers": 2,
-                "num_heads": 16,
+                "num_heads": 1,
                 "attn_drop_prob": 0.1,
                 "proj_drop_prob": 0.1,
                 "mlp_drop_prob": 0.1,
             },
             "process": {
-                "dim": model_config["swin"].stages[-1].out_dim,
+                "dim": model_config["encoder"]["out_channels"],
                 "num_layers": 4,
-                "num_heads": 16,
+                "num_heads": 1,
                 "attn_drop_prob": 0.1,
                 "proj_drop_prob": 0.1,
                 "mlp_drop_prob": 0.1,
             },
             "decode": {
-                "dim": model_config["swin"].stages[-1].out_dim,
+                "dim": model_config["encoder"]["out_channels"],
                 "num_layers": 2,
-                "num_heads": 16,
-                "out_channels": model_config["swin"].stages[-1].out_dim,
+                "num_heads": 1,
+                "out_channels": model_config["encoder"]["out_channels"],
                 "attn_drop_prob": 0.1,
                 "proj_drop_prob": 0.1,
                 "mlp_drop_prob": 0.1,
             },
         }
     )
-    model_config["decoder"] = SwinV23DDecoderConfig.model_validate(
-        {
-            "dim": model_config["swin"].stages[-1].out_dim,
-            "drop_prob": 0.1,
-            "stages": [
-                {
-                    "depth": 2,
-                    "num_heads": 16,
-                    "window_size": window_sizes[-1],
-                    "attn_drop_prob": 0.1,
-                    "proj_drop_prob": 0.1,
-                    "mlp_drop_prob": 0.1,
-                    "max_attention_batch_size": 2**12,
-                    "patch_splitting": {
-                        "final_window_size": (2, 2, 2),
-                        "out_dim_ratio": 2,
-                    },
-                },
-                {
-                    "depth": 4,
-                    "num_heads": 16,
-                    "window_size": window_sizes[-2],
-                    "attn_drop_prob": 0.1,
-                    "proj_drop_prob": 0.1,
-                    "mlp_drop_prob": 0.1,
-                    "max_attention_batch_size": 2**12,
-                    "patch_splitting": {
-                        "final_window_size": (2, 2, 2),
-                        "out_dim_ratio": 2,
-                    },
-                },
-                {
-                    "depth": 2,
-                    "num_heads": 8,
-                    "window_size": window_sizes[-3],
-                    "attn_drop_prob": 0.1,
-                    "proj_drop_prob": 0.1,
-                    "mlp_drop_prob": 0.1,
-                    "max_attention_batch_size": 2**12,
-                    "patch_splitting": {
-                        "final_window_size": (2, 2, 2),
-                        "out_dim_ratio": 2,
-                    },
-                },
-                {
-                    "depth": 2,
-                    "num_heads": 4,
-                    "window_size": window_sizes[-4],
-                    "attn_drop_prob": 0.1,
-                    "proj_drop_prob": 0.1,
-                    "mlp_drop_prob": 0.1,
-                    "max_attention_batch_size": 2**12,
-                },
-            ],
-        }
-    )
-    model_config["unembedding"] = {
-        "num_upsamples": 1,
-        "upsample_channels": [
-            model_config["decoder"].stages[-1].out_dim // 2,
-        ],
-        "in_channels": model_config["decoder"].stages[-1].out_dim,
-        "out_channels": model_config["swin"].in_channels,
+    model_config["decoder"] = {
+        "_target_": "monai.apps.generation.maisi.networks.autoencoderkl_maisi.MaisiDecoder",
+        "spatial_dims": model_config["encoder"]["spatial_dims"],
+        "in_channels": model_config["encoder"]["out_channels"],
+        "num_channels": model_config["encoder"]["num_channels"],
+        "out_channels": model_config["encoder"]["in_channels"],
+        "num_res_blocks": model_config["encoder"]["num_res_blocks"],
+        "norm_num_groups": model_config["encoder"]["norm_num_groups"],
+        "norm_eps": model_config["encoder"]["norm_eps"],
+        "attention_levels": model_config["encoder"]["attention_levels"],
+        "with_nonlocal_attn": model_config["encoder"]["with_nonlocal_attn"],
+        "include_fc": model_config["encoder"]["include_fc"],
+        "use_combined_linear": model_config["encoder"]["use_combined_linear"],
+        "use_flash_attention": model_config["encoder"]["use_flash_attention"],
+        "use_convtranspose": False,
+        "num_splits": model_config["encoder"]["num_splits"],
+        "dim_split": model_config["encoder"]["dim_split"],
+        "norm_float16": False,
+        "print_info": model_config["encoder"]["print_info"],
+        "save_mem": model_config["encoder"]["save_mem"],
     }
-    model_config["pathway_drop_prob"] = 0.5
+    # model_config["pathway_drop_prob"] = 0.5
 
-    latent_patch_size = model_config["swin"].patch_size
-    for stage in model_config["swin"].stages:
-        latent_patch_size = stage.get_out_patch_size(latent_patch_size)
-    # latent_patch_size = (64, 64, 64)
+    latent_patch_size = [2 ** (len(model_config["encoder"]["num_res_blocks"]) - 1)] * 3
+    # # latent_patch_size = (64, 64, 64)
     training_latent_grid_size = tuple(size // patch for size, patch in zip(training_image_size, latent_patch_size))
     compression_factor = tuple(training_image_size[i] // training_latent_grid_size[i] for i in range(3))
 
@@ -378,40 +286,40 @@ def get_config():
                     clipping_transform,
                 ],
             },
-            test_augmentations={
-                "_target_": "monai.transforms.Compose",
-                "transforms": [
-                    {
-                        "_target_": "vision_architectures.transforms.croppad.CropForegroundWithCropTrackingd",
-                        "keys": transformsd_keys,
-                        "source_key": transformsd_keys[0],
-                        "allow_smaller": True,
-                    },
-                    {
-                        "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
-                        "keys": transformsd_keys,
-                        "a_min": -1000,
-                        "a_max": 2000,
-                        "b_min": -1.0,
-                        "b_max": 1.0,
-                        "clip": True,
-                    },
-                    {
-                        "_target_": "monai.transforms.SpatialPadd",
-                        "keys": transformsd_keys,
-                        "spatial_size": minimum_input_size,
-                        "mode": "constant",
-                        "value": -1,
-                    },
-                    {
-                        "_target_": "monai.transforms.DivisiblePadd",
-                        "keys": transformsd_keys,
-                        "k": latent_patch_size,
-                        "mode": "constant",
-                        "value": -1,
-                    },
-                ],
-            },
+            # test_augmentations={
+            #     "_target_": "monai.transforms.Compose",
+            #     "transforms": [
+            #         {
+            #             "_target_": "vision_architectures.transforms.croppad.CropForegroundWithCropTrackingd",
+            #             "keys": transformsd_keys,
+            #             "source_key": transformsd_keys[0],
+            #             "allow_smaller": True,
+            #         },
+            #         {
+            #             "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
+            #             "keys": transformsd_keys,
+            #             "a_min": -1000,
+            #             "a_max": 2000,
+            #             "b_min": -1.0,
+            #             "b_max": 1.0,
+            #             "clip": True,
+            #         },
+            #         {
+            #             "_target_": "monai.transforms.SpatialPadd",
+            #             "keys": transformsd_keys,
+            #             "spatial_size": minimum_input_size,
+            #             "mode": "constant",
+            #             "value": -1,
+            #         },
+            #         {
+            #             "_target_": "monai.transforms.DivisiblePadd",
+            #             "keys": transformsd_keys,
+            #             "k": latent_patch_size,
+            #             "mode": "constant",
+            #             "value": -1,
+            #         },
+            #     ],
+            # },
             #
             num_workers=16,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
@@ -439,14 +347,14 @@ def get_config():
                 # "spectral_loss": 1e-6,
             },
             kl_annealing_start_epoch=10,
-            kl_annealing_epochs=25,
+            kl_annealing_epochs=50,
             # free_bits=1.0,
             #
             # residual_connection_epochs=50,
             #
             checkpointing_level=2,
             #
-            fast_dev_run=False,
+            fast_dev_run=20,
             strategy="ddp",
             #
             accumulate_grad_batches=10,
@@ -454,36 +362,23 @@ def get_config():
         )
     )
 
-    patch_sizes = [model_config["swin"].patch_size]
-    for i in range(len(model_config["swin"].stages)):
-        patch_sizes.append(model_config["swin"].stages[i].get_out_patch_size(patch_sizes[-1]))
-    grid_sizes = []
-    for i in range(len(model_config["swin"].stages) + 1):
-        grid_sizes.append(tuple([size // patch for size, patch in zip(training_image_size, patch_sizes[i])]))
-    # Ensure grid size can be divided by window size
-    for i in range(len(model_config["swin"].stages)):
-        assert all(
-            [grid % window == 0 for grid, window in zip(grid_sizes[i], model_config["swin"].stages[i].window_size)]
-        ), f"{grid_sizes[i]} is not divisible by {model_config['swin'].stages[i].window_size}"
     clearml_tags = [
         f"Training image size: {training_image_size}",
-        f"Patch sizes: {patch_sizes}",
-        f"Grid sizes: {grid_sizes}",
-        f"Dimensions: {[stage.out_dim for stage in model_config['swin'].stages]}",
+        f"Latent patch size: {latent_patch_size}",
+        f"Latent grid size: {training_latent_grid_size}",
         f"Train batch size: {data_config.train_batch_size}",
         f"Compression: {compression_factor}",
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Switched back to Adam",
-        "Removed init of quant layers",
-        "Perceiver only looking at deepest encoding instead of all stage_outputs",
-        # "Resized input images to (256, 256) before cropping",
+        "Increased one epoch to 4000 scans",
+        "Switched to AdamW",
+        "Init of quant layers to ones and zeros",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v32__2025_03_10",
+            task_name="v31__2025_03_10",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
@@ -529,8 +424,20 @@ if __name__ == "__main__":
 
     config = get_config()
 
-    sample_input = torch.zeros((1, 100, 100, 100))
-    transforms = instantiate(config.data.toDict()["train_augmentations"])
-    print(transforms)
-    sample_output = transforms(sample_input)
+    encoder = instantiate(config.model["encoder"])
+    decoder = instantiate(config.model["decoder"])
+
+    print(encoder)
+    print(decoder)
+
+    sample_input = torch.empty((1, 1, *config.image_size))
+    sample_output = encoder(sample_input)
     print(sample_output.shape)
+    sample_output = decoder(sample_output)
+    print(sample_output.shape)
+
+    # sample_input = torch.zeros((1, 100, 100, 100))
+    # transforms = instantiate(config.data.toDict()["train_augmentations"])
+    # print(transforms)
+    # sample_output = transforms(sample_input)
+    # print(sample_output.shape)
