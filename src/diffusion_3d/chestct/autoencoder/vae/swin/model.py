@@ -41,7 +41,7 @@ class AdaptiveVAELightning(L.LightningModule):
         self.val_losses = []
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
-        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=5)
+        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=4)
 
         self.train_metrics = []
         self.val_metrics = []
@@ -331,25 +331,25 @@ class AdaptiveVAELightning(L.LightningModule):
         # x: (b, d1, z1, y1, x1)
         # crop_offsets: (b, 3)
 
-        # residual_connection = self.autoencoder.residual_connection
-        # if self.training and not residual_connection.weight_scheduler.is_ready():
-        #     steps_per_epoch = (
-        #         self.trainer.estimated_stepping_batches
-        #         * self.trainer.accumulate_grad_batches
-        #         // self.trainer.max_epochs
-        #     )
-        #     residual_connection_epochs = self.training_config.residual_connection_epochs
-        #     residual_connection_steps = residual_connection_epochs * steps_per_epoch
-        #     residual_connection.set_num_steps(residual_connection_steps)
+        residual_connection = self.autoencoder.residual_connection
+        if self.training and not residual_connection.weight_scheduler.is_ready():
+            steps_per_epoch = (
+                self.trainer.estimated_stepping_batches
+                * self.trainer.accumulate_grad_batches
+                // self.trainer.max_epochs
+            )
+            residual_connection_epochs = self.training_config.residual_connection_epochs
+            residual_connection_steps = residual_connection_epochs * steps_per_epoch
+            residual_connection.set_num_steps(residual_connection_steps)
 
-        # if run_type == "train":
-        #     self.log(
-        #         "train_kl_step/residual_connection_weight",
-        #         residual_connection.weight_scheduler.get(),
-        #         sync_dist=True,
-        #         on_step=True,
-        #         on_epoch=False,
-        #     )
+        if run_type == "train":
+            self.log(
+                "train_kl_step/residual_connection_weight",
+                residual_connection.weight_scheduler.get(),
+                sync_dist=True,
+                on_step=True,
+                on_epoch=False,
+            )
 
         return self.autoencoder(x, crop_offsets, run_type)
 

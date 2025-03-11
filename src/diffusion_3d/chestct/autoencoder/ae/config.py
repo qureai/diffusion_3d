@@ -14,7 +14,6 @@ def get_config():
         (4, 4, 4),
         (4, 4, 4),
         (4, 4, 4),
-        # (6, 6, 6),
         (4, 4, 4),
     ]
     model_config = {
@@ -435,18 +434,13 @@ def get_config():
                 "reconstruction_loss": 1.0,
                 "perceptual_loss": 0.2,
                 "ms_ssim_loss": 0.1,
-                "kl_loss": 5e-6,
-                # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=15,
-            kl_annealing_epochs=30,
-            # free_bits=1.0,
             #
             residual_connection_epochs=25,
             #
             checkpointing_level=2,
             #
-            fast_dev_run=False,
+            fast_dev_run=20,
             strategy="ddp",
             #
             accumulate_grad_batches=5,
@@ -474,16 +468,16 @@ def get_config():
         f"Compression: {compression_factor}",
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
-        "VAE",
-        "Added back the residual connection",
-        "Reduced training size to 64",
-        "Reduced the depth of swin",
-        # "Resized input images to (256, 256) before cropping",
+        "AE",
+        "Removed sampling and KL loss",
+        "Added position embeddings to perceiver latent space",
+        "Removed gradient stabilizers",
+        "Once residual connection annealing is complete, focus is entirely on perceiver",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v33__2025_03_11",
+            task_name="v34__2025_03_11",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
@@ -529,7 +523,10 @@ if __name__ == "__main__":
 
     config = get_config()
 
-    sample_input = torch.zeros((1, 100, 100, 100))
+    sample_input = {
+        "image": torch.zeros((1, 512, 512, 512)),
+        "Shape": (512, 512, 512),
+    }
     transforms = instantiate(config.data.toDict()["train_augmentations"])
     print(transforms)
     sample_output = transforms(sample_input)

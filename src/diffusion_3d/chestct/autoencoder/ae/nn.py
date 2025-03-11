@@ -61,25 +61,6 @@ class SigmoidScheduler:
         return scaled_y
 
 
-class GradientStabilizer(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.norm_pre = nn.LayerNorm(dim, eps=1e-6)
-        self.projection = nn.Linear(dim, dim)
-        # Initialize with near-identity transformation
-        nn.init.eye_(self.projection.weight)
-        nn.init.zeros_(self.projection.bias)
-        self.activation = nn.GELU()  # Scale-stabilizing activation
-        self.norm_post = nn.LayerNorm(dim, eps=1e-6)
-
-    def forward(self, x):
-        x = self.norm_pre(x)
-        x = self.projection(x)
-        x = self.activation(x)
-        x = self.norm_post(x)
-        return x
-
-
 class AdaptorResidualConnection(nn.Module):
     def __init__(self, pathway_drop_prob=0.0):
         super().__init__()
@@ -98,23 +79,13 @@ class AdaptorResidualConnection(nn.Module):
         device = swin_encoder_output.device
         b = swin_encoder_output.shape[0]
         perceiver_weight: torch.Tensor = torch.full((b, 1, 1, 1, 1), perceiver_weight, device=device)
+        swin_weight = 1 - perceiver_weight
 
         # Implement dropout
         if self.training and self.pathway_drop_prob > 0:
             dropout_mask = torch.rand_like(perceiver_weight) < self.pathway_drop_prob
             if dropout_mask.any():
                 swin_encoder_output[dropout_mask.squeeze()] = swin_encoder_output[dropout_mask.squeeze()].detach()
-
-            # if dropout_mask.any():
-            #     dropped_weight_choices = torch.tensor(
-            #         [self.weight_scheduler._sigmoid(-10), self.weight_scheduler._sigmoid(10)], device=device
-            #     )
-            #     dropped_weight_mask = torch.randint_like(dropout_mask, low=0, high=2)
-            #     dropped_weight = dropped_weight_choices[dropped_weight_mask]
-
-            #     perceiver_weight = perceiver_weight * (1 - dropout_mask) + dropped_weight * dropout_mask
-
-        swin_weight = 1 - perceiver_weight
 
         output = swin_weight * swin_encoder_output + perceiver_weight * perceiver_decoder_output
         return output
@@ -199,7 +170,7 @@ class UnembeddingLayer(nn.Module):
         return x
 
 
-class AdaptiveVAE(nn.Module):
+class AdaptiveAE(nn.Module):
     def __init__(self, model_config: dict, checkpointing_level: int = 0):
         super().__init__()
 
@@ -221,11 +192,6 @@ class AdaptiveVAE(nn.Module):
         self.encoder = SwinV23DModel(model_config.swin, checkpointing_level)
         self.perceiver_position_embeddings = perceiver_position_embeddings
         self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)
-        self.encoder_stabilizer = GradientStabilizer(latent_channels)
-        self.quant_conv_mu = nn.Linear(latent_channels, latent_channels)
-        self.quant_conv_log_sigma = nn.Linear(latent_channels, latent_channels)
-        self.post_quant_conv = nn.Linear(latent_channels, latent_channels)
-        self.decoder_stabilizer = GradientStabilizer(latent_channels)
         self.unadapt = Perceiver3DDecoder(model_config.adaptor, perceiver_position_embeddings, checkpointing_level)
         self.residual_connection = AdaptorResidualConnection(model_config.pathway_drop_prob)
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
@@ -275,31 +241,13 @@ class AdaptiveVAE(nn.Module):
             sliding_stride=sliding_stride,
         )
 
-        adapted = self.encoder_stabilizer(adapted)
-
-        z_mu = self.quant_conv_mu(adapted)
-        z_log_var = self.quant_conv_log_sigma(adapted)
-        z_log_var = torch.clamp(z_log_var, -30.0, 20.0)
-        z_sigma = torch.exp(z_log_var / 2)
-
-        if return_stage_outputs:
-            return z_mu, z_sigma, encoded, scaled_crop_offsets, stage_outputs
-        return z_mu, z_sigma, encoded, scaled_crop_offsets
-
-    def sampling(self, z_mu: torch.Tensor, z_sigma: torch.Tensor) -> torch.Tensor:
-        eps = torch.randn_like(z_sigma)
-        z_vae = z_mu + eps * z_sigma
-        return z_vae
+        return adapted, encoded, scaled_crop_offsets
 
     def decode(self, z: torch.Tensor, swin_encoder_output, scaled_crop_offsets):
         # z = rearrange(z, "b d z y x -> b z y x d")
         # dec, _, _ = self.decoder(z)
         # dec = rearrange(dec, "b z y x d -> b d z y x")
         # return dec
-
-        z = self.post_quant_conv(z)
-
-        z = self.decoder_stabilizer(z)
 
         decoder_in_shape = swin_encoder_output.shape[2:]
         unadapted = self.unadapt(z, out_shape=decoder_in_shape, crop_offsets=scaled_crop_offsets[-1])
@@ -318,24 +266,15 @@ class AdaptiveVAE(nn.Module):
     def forward(self, x, crop_offsets, run_type="val"):
         # x: (b, d1, z1, y1, x1)
 
-        encoded_mu, encoded_sigma, swin_encoder_output, scaled_crop_offsets = self.encode(x, crop_offsets)
-        # encoded = encoded_mu
-        if run_type == "train":
-            encoded = self.sampling(encoded_mu, encoded_sigma)
-        else:
-            encoded = encoded_mu
-        # (b, d2, z2, y2, x2)
+        adapted, encoded, scaled_crop_offsets = self.encode(x, crop_offsets)
 
-        decoded = self.decode(encoded, swin_encoder_output, scaled_crop_offsets)
-        # (b, d3, z3, y3, x3)
+        decoded = self.decode(adapted, encoded, scaled_crop_offsets)
 
         reconstructed = self.unembedding(decoded)
-        # (b, d1, z1, y1, x1)
 
         return {
             "reconstructed": reconstructed,
-            "encoded_mu": encoded_mu,
-            "encoded_sigma": encoded_sigma,
+            "encoded": encoded,
         }
 
 
@@ -351,7 +290,7 @@ if __name__ == "__main__":
     device = torch.device("cpu")
     # device = torch.device("cuda:0")
 
-    autoencoder = AdaptiveVAE(config.model, 2).to(device)
+    autoencoder = AdaptiveAE(config.model, 2).to(device)
     autoencoder.residual_connection.set_num_steps(100)
     print("Encoder:")
     describe_model(autoencoder.encoder)
