@@ -208,6 +208,9 @@ class AdaptiveAE(nn.Module):
 
         scaled_crop_offsets = []
         cur_crop_offset = crop_offsets.clone()
+        cur_crop_offset = cur_crop_offset // torch.tensor(
+            self.model_config.swin.patch_size, device=cur_crop_offset.device
+        )
         for stage_config in self.model_config.swin.stages:
             scaled_crop_offsets.append(
                 cur_crop_offset // torch.tensor(stage_config.spatial_compression_ratio, device=cur_crop_offset.device)
@@ -311,7 +314,7 @@ if __name__ == "__main__":
     initial_mem = process.memory_info().rss  # in bytes
 
     sample_input = torch.zeros((1, 1, *config.image_size)).to(device)
-    crop_offsets = torch.Tensor([[0, 0, 0]]).to(device)
+    crop_offsets = torch.Tensor([[100, 100, 100]]).to(device)
 
     tic = perf_counter()
     sample_output = autoencoder(sample_input, crop_offsets, "train")

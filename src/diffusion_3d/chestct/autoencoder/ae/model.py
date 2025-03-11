@@ -126,6 +126,7 @@ class AdaptiveAELightning(L.LightningModule):
         }
 
     def on_after_backward(self):
+        # NOTE: This function is called before gradient clipping (and obviously after loss.backward())
         # Log gradient info
         norm = 0.0
         max_abs = 0.0
