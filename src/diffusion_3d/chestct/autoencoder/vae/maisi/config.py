@@ -358,7 +358,7 @@ def get_config():
                 (node, SERVER_MAPPING[node])
                 for node in [
                     "qrnd10.internal.qure.ai",  # First one is master node
-                    "qrnd8.internal.qure.ai",
+                    "qrnd21.l40.sr.internal.qure.ai",
                 ]
             ],
         )

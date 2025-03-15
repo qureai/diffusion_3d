@@ -5,8 +5,6 @@ from config import get_config
 from einops import rearrange
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
-from munch import munchify
-from neuro_utils.describe import describe_model
 
 from diffusion_3d.chestct.autoencoder.vae.maisi.model import AdaptiveVAELightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
