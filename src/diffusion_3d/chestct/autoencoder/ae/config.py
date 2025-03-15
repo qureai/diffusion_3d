@@ -78,31 +78,21 @@ def get_config():
     }
     model_config["adaptor"] = Perceiver3DConfig.model_validate(
         {
+            "dim": model_config["swin"].stages[-1].out_dim,
+            "latent_grid_size": (8, 8, 8),
+            "num_heads": 16,
+            "attn_drop_prob": 0.1,
+            "proj_drop_prob": 0.1,
+            "mlp_drop_prob": 0.1,
             "encode": {
-                "dim": model_config["swin"].stages[-1].out_dim,
-                "num_latent_tokens": 1024,
                 "num_layers": 2,
-                "num_heads": 16,
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
             },
             "process": {
-                "dim": model_config["swin"].stages[-1].out_dim,
                 "num_layers": 4,
-                "num_heads": 16,
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
             },
             "decode": {
-                "dim": model_config["swin"].stages[-1].out_dim,
                 "num_layers": 2,
-                "num_heads": 16,
                 "out_channels": model_config["swin"].stages[-1].out_dim,
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
             },
         }
     )
@@ -436,7 +426,7 @@ def get_config():
                 "ms_ssim_loss": 0.1,
             },
             #
-            residual_connection_epochs=25,
+            # residual_connection_epochs=25,
             #
             checkpointing_level=2,
             #
@@ -444,7 +434,7 @@ def get_config():
             strategy="ddp",
             #
             accumulate_grad_batches=5,
-            gradient_clip_val=1.0,
+            gradient_clip_val=2.0,
         )
     )
 
@@ -469,15 +459,12 @@ def get_config():
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "AE",
-        "Removed sampling and KL loss",
-        "Added position embeddings to perceiver latent space",
-        "Removed gradient stabilizers",
-        "Once residual connection annealing is complete, focus is entirely on perceiver",
+        "Converted perceiver latent space to 3D",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v34__2025_03_11",
+            task_name="v37__2025_03_12",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

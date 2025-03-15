@@ -10,80 +10,47 @@ def get_config():
     # minimum_input_size = (32, 128, 128)
     training_image_size = (64, 64, 64)
     model_config = {
-        "encoder": {
-            "_target_": "monai.apps.generation.maisi.networks.autoencoderkl_maisi.MaisiEncoder",
+        "maisi": {
             "spatial_dims": 3,
             "in_channels": 1,
-            "num_channels": [64, 128, 256],
-            "out_channels": 4,
+            "latent_channels": 4,
+            "out_channels": 1,
             "num_res_blocks": [2, 2, 2],
+            "num_channels": [64, 128, 256],
             "norm_num_groups": 32,
             "norm_eps": 1e-06,
             "attention_levels": [False, False, False],
-            "with_nonlocal_attn": False,
-            "include_fc": False,
-            "use_combined_linear": False,
-            "use_flash_attention": False,
-            "num_splits": 2,
-            "dim_split": 1,
-            "print_info": False,
-            "save_mem": True,
-        },
+            "with_encoder_nonlocal_attn": False,
+            "with_decoder_nonlocal_attn": False,
+            "use_checkpointing": False,
+            "use_convtranspose": False,
+            "norm_float16": False,
+            "num_splits": 4,
+            "dim_split": 0,
+        }
     }
     model_config["adaptor"] = Perceiver3DConfig.model_validate(
         {
+            "dim": 192,
+            "latent_grid_size": (16, 16, 16),
+            "num_heads": 16,
+            "attn_drop_prob": 0.1,
+            "proj_drop_prob": 0.1,
+            "mlp_drop_prob": 0.1,
             "encode": {
-                "dim": model_config["encoder"]["out_channels"],
-                "num_latent_tokens": 1024,
                 "num_layers": 2,
-                "num_heads": 1,
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
             },
             "process": {
-                "dim": model_config["encoder"]["out_channels"],
                 "num_layers": 4,
-                "num_heads": 1,
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
             },
             "decode": {
-                "dim": model_config["encoder"]["out_channels"],
                 "num_layers": 2,
-                "num_heads": 1,
-                "out_channels": model_config["encoder"]["out_channels"],
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
+                "out_channels": model_config["maisi"]["latent_channels"],
             },
         }
     )
-    model_config["decoder"] = {
-        "_target_": "monai.apps.generation.maisi.networks.autoencoderkl_maisi.MaisiDecoder",
-        "spatial_dims": model_config["encoder"]["spatial_dims"],
-        "in_channels": model_config["encoder"]["out_channels"],
-        "num_channels": model_config["encoder"]["num_channels"],
-        "out_channels": model_config["encoder"]["in_channels"],
-        "num_res_blocks": model_config["encoder"]["num_res_blocks"],
-        "norm_num_groups": model_config["encoder"]["norm_num_groups"],
-        "norm_eps": model_config["encoder"]["norm_eps"],
-        "attention_levels": model_config["encoder"]["attention_levels"],
-        "with_nonlocal_attn": model_config["encoder"]["with_nonlocal_attn"],
-        "include_fc": model_config["encoder"]["include_fc"],
-        "use_combined_linear": model_config["encoder"]["use_combined_linear"],
-        "use_flash_attention": model_config["encoder"]["use_flash_attention"],
-        "use_convtranspose": False,
-        "num_splits": model_config["encoder"]["num_splits"],
-        "dim_split": model_config["encoder"]["dim_split"],
-        "norm_float16": False,
-        "print_info": model_config["encoder"]["print_info"],
-        "save_mem": model_config["encoder"]["save_mem"],
-    }
-    # model_config["pathway_drop_prob"] = 0.5
 
-    latent_patch_size = [2 ** (len(model_config["encoder"]["num_res_blocks"]) - 1)] * 3
+    latent_patch_size = [2 ** (len(model_config["maisi"]["num_res_blocks"]) - 1)] * 3
     # # latent_patch_size = (64, 64, 64)
     training_latent_grid_size = tuple(size // patch for size, patch in zip(training_image_size, latent_patch_size))
     compression_factor = tuple(training_image_size[i] // training_latent_grid_size[i] for i in range(3))
@@ -121,7 +88,7 @@ def get_config():
             limited_dataset_size=None,
             #
             allowed_spacings=((0.4, 7), (-1, -1), (-1, -1)),
-            allowed_shapes=((96, -1), (256, -1), (256, -1)),
+            allowed_shapes=((64, -1), (256, -1), (256, -1)),
             #
             train_augmentations={
                 "_target_": "monai.transforms.Compose",
@@ -350,15 +317,13 @@ def get_config():
             kl_annealing_epochs=50,
             # free_bits=1.0,
             #
-            # residual_connection_epochs=50,
-            #
             checkpointing_level=2,
             #
             fast_dev_run=20,
             strategy="ddp",
             #
             accumulate_grad_batches=10,
-            gradient_clip_val=1.0,
+            gradient_clip_val=None,
         )
     )
 
@@ -371,14 +336,14 @@ def get_config():
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Increased one epoch to 4000 scans",
-        "Switched to AdamW",
-        "Init of quant layers to ones and zeros",
+        "Frozen MAISI",
+        "Trainable perceiver",
+        "Removed gradient clipping",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v31__2025_03_10",
+            task_name="v38__2025_03_15",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
@@ -440,4 +405,5 @@ if __name__ == "__main__":
     # transforms = instantiate(config.data.toDict()["train_augmentations"])
     # print(transforms)
     # sample_output = transforms(sample_input)
+    # print(sample_output.shape)
     # print(sample_output.shape)

@@ -8,7 +8,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from munch import munchify
 from neuro_utils.describe import describe_model
 
-from diffusion_3d.chestct.autoencoder.vae.model import AdaptiveVAELightning
+from diffusion_3d.chestct.autoencoder.vae.maisi.model import AdaptiveVAELightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
 
 torch.set_float32_matmul_precision("medium")

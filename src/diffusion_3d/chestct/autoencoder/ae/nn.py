@@ -11,54 +11,7 @@ from vision_architectures.nets.perceiver_3d import (
     Perceiver3DEncoder,
 )
 from vision_architectures.nets.swinv2_3d import SwinV23DDecoder, SwinV23DModel
-
-
-class SigmoidScheduler:
-    def __init__(self, min_y=0.0, max_y=1.0, min_x=-7, max_x=7):
-        assert min_x < max_x, "min_x must be less than max_x"
-        assert min_y < max_y, "min_y must be less than max_y"
-
-        self.min_y = min_y
-        self.max_y = max_y
-        self.min_x = min_x
-        self.max_x = max_x
-        self.num_steps = ...
-        self.x_step_size = ...
-
-        self.x = min_x
-
-    @staticmethod
-    def _sigmoid(x):
-        return 1 / (1 + math.exp(-x))
-
-    def set_num_steps(self, num_steps):
-        if self.num_steps == ...:
-            self.num_steps = num_steps
-            self.x_step_size = (self.max_x - self.min_x) / self.num_steps
-
-    def is_ready(self):
-        return self.num_steps != ...
-
-    def is_completed(self):
-        return self.x >= self.max_x
-
-    def get(self):
-        if not self.is_ready():
-            raise ValueError("Call set_num_steps first")
-        y = self._sigmoid(self.x)
-        scaled_y = self._scale(y)
-        return scaled_y
-
-    def step(self):
-        if not self.is_ready():
-            raise ValueError("Call set_num_steps first")
-        if self.is_completed():
-            return
-        self.x = self.x + self.x_step_size
-
-    def _scale(self, y):
-        scaled_y = self.min_y + y * (self.max_y - self.min_y)
-        return scaled_y
+from vision_architectures.schedulers.sigmoid import SigmoidScheduler
 
 
 class AdaptorResidualConnection(nn.Module):
@@ -66,7 +19,7 @@ class AdaptorResidualConnection(nn.Module):
         super().__init__()
 
         self.pathway_drop_prob = pathway_drop_prob  # helps avoid co-adaptation
-        self.weight_scheduler = SigmoidScheduler()
+        self.weight_scheduler = SigmoidScheduler(min_x=-5, max_x=5)
 
     def set_num_steps(self, num_steps):
         self.weight_scheduler.set_num_steps(num_steps)
@@ -187,12 +140,12 @@ class AdaptiveAE(nn.Module):
             out_channels=latent_channels,
         )
         input_channel_mapping = Perceiver3DChannelMapping(input_channel_mapping_config)
-        perceiver_position_embeddings = AbsolutePositionEmbeddings3D()
 
         self.encoder = SwinV23DModel(model_config.swin, checkpointing_level)
-        self.perceiver_position_embeddings = perceiver_position_embeddings
+        self.layernorm = nn.LayerNorm(model_config.swin.stages[-1].dim)
+        self.perceiver_position_embeddings = AbsolutePositionEmbeddings3D()
         self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)
-        self.unadapt = Perceiver3DDecoder(model_config.adaptor, perceiver_position_embeddings, checkpointing_level)
+        self.unadapt = Perceiver3DDecoder(model_config.adaptor, checkpointing_level)
         self.residual_connection = AdaptorResidualConnection(model_config.pathway_drop_prob)
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
         self.unembedding = UnembeddingLayer(model_config.unembedding)
@@ -227,6 +180,10 @@ class AdaptiveAE(nn.Module):
         #         crop_offsets=scaled_crop_offset,
         #     )
         #     embedded_stage_outputs.append(embedded_stage_output)
+        encoded = rearrange(encoded, "b d z y x -> b z y x d")
+        encoded = self.layernorm(encoded)
+        encoded = rearrange(encoded, "b z y x d -> b d z y x")
+
         embedded_encoded = encoded + self.perceiver_position_embeddings(
             batch_size=encoded.shape[0],
             dim=encoded.shape[1],
@@ -234,7 +191,6 @@ class AdaptiveAE(nn.Module):
             device=encoded.device,
             crop_offsets=scaled_crop_offsets[-1],
         )
-
         adapted = self.adapt(
             # list(
             #     reversed(embedded_stage_outputs)
@@ -255,29 +211,35 @@ class AdaptiveAE(nn.Module):
         decoder_in_shape = swin_encoder_output.shape[2:]
         unadapted = self.unadapt(z, out_shape=decoder_in_shape, crop_offsets=scaled_crop_offsets[-1])
 
-        if self.training and not self.residual_connection.weight_scheduler.is_completed():
-            decoder_input = self.residual_connection(swin_encoder_output, unadapted)
-        else:
-            decoder_input = unadapted
+        unadapted = rearrange(unadapted, "b d z y x -> b z y x d")
+        unadapted = self.layernorm(unadapted)
+        unadapted = rearrange(unadapted, "b z y x d -> b d z y x")
+
+        decoder_input = unadapted
+        # if self.training and not self.residual_connection.weight_scheduler.is_completed():
+        #     decoder_input = self.residual_connection(swin_encoder_output, unadapted)
+        # else:
+        #     decoder_input = unadapted
 
         decoder_input = rearrange(decoder_input, "b d z y x -> b z y x d")
         decoded, _, _ = self.decoder(decoder_input)
         decoded = rearrange(decoded, "b z y x d -> b d z y x")
 
-        return decoded
+        return decoded, unadapted
 
     def forward(self, x, crop_offsets, run_type="val"):
         # x: (b, d1, z1, y1, x1)
 
         adapted, encoded, scaled_crop_offsets = self.encode(x, crop_offsets)
 
-        decoded = self.decode(adapted, encoded, scaled_crop_offsets)
+        decoded, unadapted = self.decode(adapted, encoded, scaled_crop_offsets)
 
         reconstructed = self.unembedding(decoded)
 
         return {
             "reconstructed": reconstructed,
             "encoded": encoded,
+            "unadapted": unadapted,
         }
 
 

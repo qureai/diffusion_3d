@@ -14,8 +14,9 @@ from torch.nn import L1Loss, MSELoss
 from torch.nn import functional as F
 from vision_architectures.layers.embeddings import AbsolutePositionEmbeddings3D
 from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoder, SwinV23DModel
+from vision_architectures.schedulers.sigmoid import SigmoidScheduler
 
-from diffusion_3d.chestct.autoencoder.vae.nn import AdaptiveVAE, SigmoidScheduler
+from diffusion_3d.chestct.autoencoder.vae.maisi.nn import AdaptiveVAE
 
 
 class AdaptiveVAELightning(L.LightningModule):
@@ -41,12 +42,12 @@ class AdaptiveVAELightning(L.LightningModule):
         self.val_losses = []
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
-        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=5)
+        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=4)
 
         self.train_metrics = []
         self.val_metrics = []
 
-        self.kl_beta_scheduler = SigmoidScheduler()
+        # self.kl_beta_scheduler = SigmoidScheduler()
 
     def calculate_reconstruction_loss(self, reconstructed, x):
         return self.reconstruction_loss(reconstructed, x)
@@ -179,7 +180,7 @@ class AdaptiveVAELightning(L.LightningModule):
             "reconstruction_loss": self.calculate_reconstruction_loss(reconstructed, x),
             "perceptual_loss": self.calculate_perceptual_loss(reconstructed, x),
             "ms_ssim_loss": self.calculate_ms_ssim_loss(reconstructed, x),
-            "kl_loss": self.calculate_kl_loss(z_mu, z_sigma),
+            # "kl_loss": self.calculate_kl_loss(z_mu, z_sigma),
             # "spectral_loss": self.calculate_spectral_loss(z_mu, z_sigma),
         }
 
@@ -190,33 +191,33 @@ class AdaptiveVAELightning(L.LightningModule):
         }
 
     def calculate_autoencoder_loss(self, all_losses):
-        # Apply beta annealing
-        if not self.kl_beta_scheduler.is_ready():
-            steps_per_epoch = (
-                self.trainer.estimated_stepping_batches
-                * self.trainer.accumulate_grad_batches
-                // self.trainer.max_epochs
-            )
-            kl_annealing_epochs = self.training_config.kl_annealing_epochs
-            kl_annealing_steps = kl_annealing_epochs * steps_per_epoch
-            self.kl_beta_scheduler.set_num_steps(kl_annealing_steps)
+        # # Apply beta annealing
+        # if not self.kl_beta_scheduler.is_ready():
+        #     steps_per_epoch = (
+        #         self.trainer.estimated_stepping_batches
+        #         * self.trainer.accumulate_grad_batches
+        #         // self.trainer.max_epochs
+        #     )
+        #     kl_annealing_epochs = self.training_config.kl_annealing_epochs
+        #     kl_annealing_steps = kl_annealing_epochs * steps_per_epoch
+        #     self.kl_beta_scheduler.set_num_steps(kl_annealing_steps)
 
-        kl_beta = 0.0
-        if self.current_epoch >= self.training_config.kl_annealing_start_epoch:
-            kl_beta = self.kl_beta_scheduler.get()
-            if self.training:
-                self.kl_beta_scheduler.step()
-        all_losses["kl_loss"] = kl_beta * all_losses["kl_loss"]
-        # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
+        # kl_beta = 0.0
+        # if self.current_epoch >= self.training_config.kl_annealing_start_epoch:
+        #     kl_beta = self.kl_beta_scheduler.get()
+        #     if self.training:
+        #         self.kl_beta_scheduler.step()
+        # all_losses["kl_loss"] = kl_beta * all_losses["kl_loss"]
+        # # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
 
-        if self.training:
-            self.log("train_kl_step/beta", kl_beta, sync_dist=True, on_step=True, on_epoch=False)
+        # if self.training:
+        #     self.log("train_kl_step/beta", kl_beta, sync_dist=True, on_step=True, on_epoch=False)
 
         all_losses["autoencoder_loss"] = (
             self.training_config.loss_weights["reconstruction_loss"] * all_losses["reconstruction_loss"]
             + self.training_config.loss_weights["perceptual_loss"] * all_losses["perceptual_loss"]
             + self.training_config.loss_weights["ms_ssim_loss"] * all_losses["ms_ssim_loss"]
-            + self.training_config.loss_weights["kl_loss"] * all_losses["kl_loss"]
+            # + self.training_config.loss_weights["kl_loss"] * all_losses["kl_loss"]
             # + self.training_config.loss_weights["spectral_loss"] * all_losses["spectral_loss"]
         )
 
@@ -226,8 +227,9 @@ class AdaptiveVAELightning(L.LightningModule):
 
         autoencoder_output = self(x, crop_offsets, prefix)
         reconstructed = autoencoder_output["reconstructed"]
-        encoded_mu = autoencoder_output["encoded_mu"]
-        encoded_sigma = autoencoder_output["encoded_sigma"]
+        encoded_mu, encoded_sigma = None, None
+        # encoded_mu = autoencoder_output["encoded_mu"]
+        # encoded_sigma = autoencoder_output["encoded_sigma"]
 
         all_losses = self.calculate_basic_losses(x, reconstructed, encoded_mu, encoded_sigma)
         all_metrics = self.calculate_metrics(x, reconstructed)
@@ -296,7 +298,7 @@ class AdaptiveVAELightning(L.LightningModule):
     #     self.process_epoch("val")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.training_config.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.training_config.lr)
 
         total_steps = self.trainer.estimated_stepping_batches
         # scheduler = DecayingSineLR(optimizer, 1e-6, self.training_config.lr, total_steps // 4, 0.5)
@@ -376,6 +378,5 @@ if __name__ == "__main__":
     }
     sample_output = autoencoder.process_step(sample_input, "train", 0)
 
-    print("Input shape: ", sample_input.shape)
-    print()
-    print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
+    print("Input shape: ", sample_input["image"].shape)
+    print("Reconstruction shape:", sample_output["reconstructed"].shape)

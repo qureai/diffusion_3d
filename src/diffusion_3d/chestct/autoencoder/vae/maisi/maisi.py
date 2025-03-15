@@ -224,7 +224,7 @@ class MaisiConvolution(nn.Module):
                 if self.print_info:
                     logger.info(f"MaisiConvolution concat progress: {k + 1}/{len(outputs) - 1}.")
 
-            x = x.to("cuda", non_blocking=True)
+            x = x.to("cuda", non_blocking=True) if outputs[0].device.type == "cuda" else x
         return x
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -664,7 +664,7 @@ class MaisiEncoder(nn.Module):
                 save_mem=save_mem,
             )
         )
-        blocks.append(
+        blocks.append(  # Mapping 256 cahnnels to 4
             MaisiConvolution(
                 spatial_dims=spatial_dims,
                 in_channels=num_channels[-1],
@@ -988,3 +988,32 @@ class AutoencoderKlMaisi(AutoencoderKL):
             print_info=print_info,
             save_mem=save_mem,
         )
+
+
+if __name__ == "__main__":
+    device = torch.device("cpu")
+    device = torch.device("cuda:0")
+
+    model = AutoencoderKlMaisi(
+        spatial_dims=3,
+        in_channels=1,
+        latent_channels=4,
+        out_channels=1,
+        num_res_blocks=[2, 2, 2],
+        num_channels=[64, 128, 256],
+        norm_num_groups=32,
+        norm_eps=1e-06,
+        attention_levels=[False, False, False],
+        with_encoder_nonlocal_attn=False,
+        with_decoder_nonlocal_attn=False,
+        use_checkpointing=False,
+        use_convtranspose=False,
+        norm_float16=False,
+        num_splits=64,
+        dim_split=0,
+    )
+    model.to(device)
+    model.eval()
+    sample_input = torch.randn(1, 1, 512, 512, 512, device=device)
+    output = model(sample_input)
+    print(sample_input.shape, output[0].shape)

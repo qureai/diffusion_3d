@@ -190,30 +190,51 @@ class AdaptiveAELightning(L.LightningModule):
         # x: (b, d1, z1, y1, x1)
         # crop_offsets: (b, 3)
 
-        residual_connection = self.autoencoder.residual_connection
-        try:
-            if self.training and not residual_connection.weight_scheduler.is_ready():
-                steps_per_epoch = (
-                    self.trainer.estimated_stepping_batches
-                    * self.trainer.accumulate_grad_batches
-                    // self.trainer.max_epochs
-                )
-                residual_connection_epochs = self.training_config.residual_connection_epochs
-                residual_connection_steps = residual_connection_epochs * steps_per_epoch
-                residual_connection.set_num_steps(residual_connection_steps)
+        # residual_connection = self.autoencoder.residual_connection
+        # try:
+        #     if self.training and not residual_connection.weight_scheduler.is_ready():
+        #         steps_per_epoch = (
+        #             self.trainer.estimated_stepping_batches
+        #             * self.trainer.accumulate_grad_batches
+        #             // self.trainer.max_epochs
+        #         )
+        #         residual_connection_epochs = self.training_config.residual_connection_epochs
+        #         residual_connection_steps = residual_connection_epochs * steps_per_epoch
+        #         residual_connection.set_num_steps(residual_connection_steps)
 
-            if run_type == "train":
-                self.log(
-                    "train_sigmoids/residual_connection_weight",
-                    residual_connection.weight_scheduler.get(),
-                    sync_dist=True,
-                    on_step=True,
-                    on_epoch=False,
-                )
-        except:  # Gives an error when called outside of training because accessing self.trainer
-            residual_connection.set_num_steps(100)  # dummy number
+        #     if run_type == "train":
+        #         self.log(
+        #             "train_res_conn/perceiver_weight",
+        #             residual_connection.weight_scheduler.get(),
+        #             sync_dist=True,
+        #             on_step=True,
+        #             on_epoch=False,
+        #         )
+        # except:  # Gives an error when called outside of training because accessing self.trainer
+        #     residual_connection.set_num_steps(100)  # dummy number
 
-        return self.autoencoder(x, crop_offsets, run_type)
+        output = self.autoencoder(x, crop_offsets, run_type)
+
+        # if run_type == "train":
+        #     encoded = output["encoded"]
+        #     unadapted = output["unadapted"]
+        #     self.log_dict(
+        #         {
+        #             "train_res_conn/encoded_mean": encoded.mean(),
+        #             "train_res_conn/encoded_std": encoded.std(),
+        #             "train_res_conn/encoded_min": encoded.min(),
+        #             "train_res_conn/encoded_max": encoded.max(),
+        #             "train_res_conn/unadapted_mean": unadapted.mean(),
+        #             "train_res_conn/unadapted_std": unadapted.std(),
+        #             "train_res_conn/unadapted_min": unadapted.min(),
+        #             "train_res_conn/unadapted_max": unadapted.max(),
+        #         },
+        #         sync_dist=True,
+        #         on_step=True,
+        #         on_epoch=False,
+        #     )
+
+        return output
 
     # def on_before_zero_grad(self, optimizer):
     #     """Will print all unused parameters"""
