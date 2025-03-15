@@ -1,8 +1,9 @@
+import socket
+
 import lightning as L
 import torch
 from clearml import Task
 from config import get_config
-from einops import rearrange
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 
@@ -23,12 +24,13 @@ L.seed_everything(config.training.seed, workers=True)
 # Start ClearML task if applicable
 task = None
 if not config.training.fast_dev_run and config.additional.log_on_clearml:
-    task: Task = Task.init(
-        project_name=config.additional.clearml_project,
-        task_name=config.additional.task_name,
-    )
-    task.connect_configuration(config, name="config")
-    task.add_tags(config.additional.clearml_tags)
+    if not config.distributed.distributed or socket.gethostname() == config.distributed.nodes[0][0]:
+        task: Task = Task.init(
+            project_name=config.additional.clearml_project,
+            task_name=config.additional.task_name,
+        )
+        task.connect_configuration(config, name="config")
+        task.add_tags(config.additional.clearml_tags)
 
 
 # Create model and datamodule
