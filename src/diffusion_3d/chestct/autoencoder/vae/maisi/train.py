@@ -48,18 +48,16 @@ datamodule = CTRATEDataModule(config.data)
 
 # Add model size tags to clearml
 if task is not None:
-    encoder_params = sum(p.numel() for p in model.autoencoder.encoder.parameters())
-    # perceiver_params = sum(p.numel() for p in model.autoencoder.adapt.parameters()) + sum(
-    #     p.numel() for p in model.autoencoder.unadapt.parameters()
-    # )
-    decoder_params = sum(p.numel() for p in model.autoencoder.decoder.parameters())
+    maisi_params = sum(p.numel() for p in model.autoencoder.maisi.parameters())
+    perceiver_params = sum(p.numel() for p in model.autoencoder.adapt.parameters()) + sum(
+        p.numel() for p in model.autoencoder.unadapt.parameters()
+    )
     total_params = sum(p.numel() for p in model.autoencoder.parameters())
-    any_other_params = total_params - (encoder_params + decoder_params)
+    any_other_params = total_params - (maisi_params + perceiver_params)
     task.add_tags(
         [
-            f"Encoder: {encoder_params:,} params",
-            # f"Perceiver: {perceiver_params:,} params",
-            f"Decoder: {decoder_params:,} params",
+            f"MAISI: {maisi_params:,} params",
+            f"Perceiver: {perceiver_params:,} params",
             f"Other: {any_other_params:,} params",
             f"Total: {total_params:,} params",
         ]
