@@ -49,6 +49,7 @@ class AdaptiveVAE(nn.Module):
             norm_float16=model_config.maisi.norm_float16,
             num_splits=model_config.maisi.num_splits,
             dim_split=model_config.maisi.dim_split,
+            save_mem=model_config.maisi.save_mem,
         )
         self.perceiver_position_embeddings = AbsolutePositionEmbeddings3D()
         self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)

@@ -27,6 +27,7 @@ def get_config():
             "norm_float16": False,
             "num_splits": 4,
             "dim_split": 0,
+            "save_mem": False,
         }
     }
     model_config["adaptor"] = Perceiver3DConfig.model_validate(
@@ -55,9 +56,9 @@ def get_config():
     training_latent_grid_size = tuple(size // patch for size, patch in zip(training_image_size, latent_patch_size))
     compression_factor = tuple(training_image_size[i] // training_latent_grid_size[i] for i in range(3))
 
-    batch_size = 20
-    num_train_samples_per_datapoint = 5
-    num_val_samples_per_datapoint = 20
+    batch_size = 8
+    num_train_samples_per_datapoint = 4
+    num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
 
@@ -352,7 +353,7 @@ def get_config():
 
     distributed_config = munchify(
         dict(
-            distributed=False,
+            distributed=True,
             nodes=[
                 (node, SERVER_MAPPING[node])
                 for node in [
