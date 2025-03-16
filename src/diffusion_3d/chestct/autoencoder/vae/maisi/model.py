@@ -175,9 +175,16 @@ class AdaptiveVAELightning(L.LightningModule):
     def calculate_ms_ssim(self, reconstructed, x):
         return self.ms_ssim_metric(reconstructed, x).mean()
 
-    def calculate_basic_losses(self, x, reconstructed, z_mu, z_sigma):
+    def calculate_basic_losses(self, x, output):
+        reconstructed = output["reconstructed"]
+        # z_mu = output["encoded_mu"]
+        # z_sigma = output["encoded_sigma"]
+        perceiver_in = output["encoded"]
+        perceiver_out = output["unadapted"]
+
         return {
             "reconstruction_loss": self.calculate_reconstruction_loss(reconstructed, x),
+            "perceiver_loss": self.calculate_reconstruction_loss(perceiver_out, perceiver_in),
             "perceptual_loss": self.calculate_perceptual_loss(reconstructed, x),
             "ms_ssim_loss": self.calculate_ms_ssim_loss(reconstructed, x),
             # "kl_loss": self.calculate_kl_loss(z_mu, z_sigma),
@@ -215,6 +222,7 @@ class AdaptiveVAELightning(L.LightningModule):
 
         all_losses["autoencoder_loss"] = (
             self.training_config.loss_weights["reconstruction_loss"] * all_losses["reconstruction_loss"]
+            + self.training_config.loss_weights["perceiver_loss"] * all_losses["perceiver_loss"]
             + self.training_config.loss_weights["perceptual_loss"] * all_losses["perceptual_loss"]
             + self.training_config.loss_weights["ms_ssim_loss"] * all_losses["ms_ssim_loss"]
             # + self.training_config.loss_weights["kl_loss"] * all_losses["kl_loss"]
@@ -226,12 +234,8 @@ class AdaptiveVAELightning(L.LightningModule):
         crop_offsets = batch["crop_offset"]
 
         autoencoder_output = self(x, crop_offsets, prefix)
+        all_losses = self.calculate_basic_losses(x, autoencoder_output)
         reconstructed = autoencoder_output["reconstructed"]
-        encoded_mu, encoded_sigma = None, None
-        # encoded_mu = autoencoder_output["encoded_mu"]
-        # encoded_sigma = autoencoder_output["encoded_sigma"]
-
-        all_losses = self.calculate_basic_losses(x, reconstructed, encoded_mu, encoded_sigma)
         all_metrics = self.calculate_metrics(x, reconstructed)
 
         self.calculate_autoencoder_loss(all_losses)
@@ -265,8 +269,8 @@ class AdaptiveVAELightning(L.LightningModule):
             "all_losses": all_losses,
             "all_metrics": all_metrics,
             "reconstructed": reconstructed,
-            "encoded_mu": encoded_mu,
-            "encoded_sigma": encoded_sigma,
+            # "encoded_mu": encoded_mu,
+            # "encoded_sigma": encoded_sigma,
         }
 
     def on_after_backward(self):
@@ -379,4 +383,10 @@ if __name__ == "__main__":
     sample_output = autoencoder.process_step(sample_input, "train", 0)
 
     print("Input shape: ", sample_input["image"].shape)
-    print("Reconstruction shape:", sample_output["reconstructed"].shape)
+    print()
+    print("Output shapes:")
+    for key, value in sample_output.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key}: {value.shape}")
+        else:
+            print(f"{key}: {value}")

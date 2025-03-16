@@ -28,6 +28,7 @@ class AdaptiveVAE(nn.Module):
         # )
         input_channel_mapping_config = Perceiver3DChannelMappingConfig(
             in_channels=model_config.maisi.latent_channels,
+            # in_channels=model_config.maisi.num_channels[-1],
             out_channels=model_config.adaptor.dim,
         )
         input_channel_mapping = Perceiver3DChannelMapping(input_channel_mapping_config)
@@ -66,6 +67,9 @@ class AdaptiveVAE(nn.Module):
         state_dict = torch.load(trained_autoencoder_path, map_location="cpu", weights_only=False)
         self.maisi.load_state_dict(state_dict)
 
+        # del self.maisi.encoder.blocks[-1]
+        # del self.maisi.decoder.blocks[0]
+
     def freeze_maisi(self):
         self.maisi.eval()
         for param in self.maisi.parameters():
@@ -94,15 +98,20 @@ class AdaptiveVAE(nn.Module):
 
     def decode(self, z: torch.Tensor, maisi_encoder_output, scaled_crop_offsets):
         decoder_in_shape = maisi_encoder_output.shape[2:]
-        decoder_input = self.unadapt(z, out_shape=decoder_in_shape, crop_offsets=scaled_crop_offsets[-1])
-        decoded = self.maisi.decode(decoder_input)
-        return decoded
+        unadapted = self.unadapt(z, out_shape=decoder_in_shape, crop_offsets=scaled_crop_offsets[-1])
+        decoded = self.maisi.decode(unadapted)
+        return decoded, unadapted
 
     def forward(self, x, crop_offsets, run_type="val"):
         adapted, encoded, scaled_crop_offsets = self.encode(x, crop_offsets)
-        decoded = self.decode(adapted, encoded, scaled_crop_offsets)
+        decoded, unadapted = self.decode(adapted, encoded, scaled_crop_offsets)
         reconstructed = decoded
-        return {"reconstructed": reconstructed}
+        return {
+            "reconstructed": reconstructed,
+            "encoded": encoded,
+            "adapted": adapted,
+            "unadapted": unadapted,
+        }
 
 
 if __name__ == "__main__":

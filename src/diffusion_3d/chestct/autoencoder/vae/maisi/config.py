@@ -309,6 +309,7 @@ def get_config():
             #
             loss_weights={
                 "reconstruction_loss": 1.0,
+                "perceiver_loss": 1.0,
                 "perceptual_loss": 0.2,
                 "ms_ssim_loss": 0.1,
                 "kl_loss": 5e-6,
@@ -339,12 +340,12 @@ def get_config():
         "VAE",
         "Frozen MAISI",
         "Trainable perceiver",
-        "Removed gradient clipping",
+        "Added reconstruction loss across perceiver",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v38__2025_03_15",
+            task_name="v39__2025_03_16",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
