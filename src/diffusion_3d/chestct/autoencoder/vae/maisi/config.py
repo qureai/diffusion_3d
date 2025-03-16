@@ -65,9 +65,9 @@ def get_config():
     clipping_transform = {
         "_target_": "monai.transforms.ScaleIntensityRanged",
         "keys": transformsd_keys,
-        "a_min": -1.0,
+        "a_min": 0.0,
         "a_max": 1.0,
-        "b_min": -1.0,
+        "b_min": 0.0,
         "b_max": 1.0,
         "clip": True,
     }
@@ -112,8 +112,8 @@ def get_config():
                         "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
                         "keys": transformsd_keys,
                         "a_min": -1000,
-                        "a_max": 2000,
-                        "b_min": -1.0,
+                        "a_max": 1000,
+                        "b_min": 0.0,
                         "b_max": 1.0,
                         "clip": True,
                     },
@@ -226,8 +226,8 @@ def get_config():
                         "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
                         "keys": transformsd_keys,
                         "a_min": -1000,
-                        "a_max": 2000,
-                        "b_min": -1.0,
+                        "a_max": 1000,
+                        "b_min": 0.0,
                         "b_max": 1.0,
                         "clip": True,
                     },
@@ -341,6 +341,7 @@ def get_config():
         "Frozen MAISI",
         "Trainable perceiver",
         "Added reconstruction loss across perceiver",
+        "Corrected input data distribution to match paper i.e. [-1000, 1000] normalized to [0.0, 1.0]",
     ]
 
     additional_config = munchify(
