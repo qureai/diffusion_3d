@@ -1,8 +1,6 @@
-import math
 import os
 
 import torch
-from einops import rearrange
 from monai.apps import download_url
 from torch import nn
 from vision_architectures.layers.embeddings import AbsolutePositionEmbeddings3D
@@ -12,6 +10,7 @@ from vision_architectures.nets.perceiver_3d import (
     Perceiver3DDecoder,
     Perceiver3DEncoder,
 )
+from vision_architectures.utils.normalizations import get_norm_layer
 
 from diffusion_3d.chestct.autoencoder.vae.maisi.maisi import AutoencoderKlMaisi
 
@@ -52,31 +51,47 @@ class AdaptiveVAE(nn.Module):
             dim_split=model_config.maisi.dim_split,
             save_mem=model_config.maisi.save_mem,
         )
+        self.layernorm = get_norm_layer("layernorm3d", model_config.maisi.latent_channels)
         self.perceiver_position_embeddings = AbsolutePositionEmbeddings3D()
         self.adapt = Perceiver3DEncoder(model_config.adaptor, input_channel_mapping, checkpointing_level)
         self.unadapt = Perceiver3DDecoder(model_config.adaptor, checkpointing_level)
 
-        self.load_maisi_checkpoint()
-        self.freeze_maisi()
+        self.load_maisi_checkpoint_and_freeze()
 
-    def load_maisi_checkpoint(self):
+    def load_maisi_checkpoint_and_freeze(self):
         trained_autoencoder_path = r"/raid3/arjun/checkpoints/maisi/autoencoder_epoch273.pt"
         trained_autoencoder_path_url = "https://developer.download.nvidia.com/assets/Clara/monai/tutorials/model_zoo/model_maisi_autoencoder_epoch273_alternative.pt"
         if not os.path.exists(trained_autoencoder_path):
             download_url(url=trained_autoencoder_path_url, filepath=trained_autoencoder_path)
         state_dict = torch.load(trained_autoencoder_path, map_location="cpu", weights_only=False)
-        self.maisi.load_state_dict(state_dict)
 
-        # del self.maisi.encoder.blocks[-1]
-        # del self.maisi.decoder.blocks[0]
+        for key in list(state_dict.keys()):
+            # Remove weights of last encoder block
+            if key.startswith("encoder.blocks.10"):
+                del state_dict[key]
+            # Remove weights of first decoder block
+            if key.startswith("decoder.blocks.0"):
+                del state_dict[key]
+            # Remove quant layer weights
+            if key.startswith("quant_") or key.startswith("post_quant_"):
+                del state_dict[key]
 
-    def freeze_maisi(self):
-        self.maisi.eval()
-        for param in self.maisi.parameters():
+        self.maisi.load_state_dict(state_dict, strict=False)
+
+        # Remove quant layers
+        del self.maisi.quant_conv_mu
+        del self.maisi.quant_conv_log_sigma
+        del self.maisi.post_quant_conv
+
+        self.maisi.train()
+        for name, param in self.maisi.named_parameters():
+            if name.startswith("encoder.blocks.10") or name.startswith("decoder.blocks.0"):
+                continue
             param.requires_grad = False
 
     def encode(self, x: torch.Tensor, crop_offsets: torch.Tensor = None):
-        encoded, _ = self.maisi.encode(x)  # discard sigma and assume mu is the output
+        encoded = self.maisi.encoder(x)
+        encoded = self.layernorm(encoded)
 
         scaled_crop_offsets = []
         cur_crop_offset = crop_offsets.clone()
@@ -84,22 +99,22 @@ class AdaptiveVAE(nn.Module):
             cur_crop_offset = cur_crop_offset // 2
             scaled_crop_offsets.append(cur_crop_offset)
 
-        # embedded_encoded = encoded + self.perceiver_position_embeddings(
-        #     batch_size=encoded.shape[0],
-        #     dim=encoded.shape[1],
-        #     grid_size=encoded.shape[2:],
-        #     device=encoded.device,
-        #     crop_offsets=scaled_crop_offsets[-1],
-        # )
-        # adapted = self.adapt(embedded_encoded)
-        adapted = self.adapt(encoded)
+        embedded_encoded = encoded + self.perceiver_position_embeddings(
+            batch_size=encoded.shape[0],
+            dim=encoded.shape[1],
+            grid_size=encoded.shape[2:],
+            device=encoded.device,
+            crop_offsets=scaled_crop_offsets[-1],
+        )
+        adapted = self.adapt(embedded_encoded)
 
         return adapted, encoded, scaled_crop_offsets
 
     def decode(self, z: torch.Tensor, maisi_encoder_output, scaled_crop_offsets):
         decoder_in_shape = maisi_encoder_output.shape[2:]
         unadapted = self.unadapt(z, out_shape=decoder_in_shape, crop_offsets=scaled_crop_offsets[-1])
-        decoded = self.maisi.decode(unadapted)
+        unadapted = self.layernorm(unadapted)
+        decoded = self.maisi.decoder(unadapted)
         return decoded, unadapted
 
     def forward(self, x, crop_offsets, run_type="val"):
@@ -124,7 +139,7 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    device = torch.device("cuda:0")
+    # device = torch.device("cuda:0")
 
     autoencoder = AdaptiveVAE(config.model, 2).to(device)
     print("MAISI:")

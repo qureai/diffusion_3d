@@ -13,7 +13,7 @@ def get_config():
         "maisi": {
             "spatial_dims": 3,
             "in_channels": 1,
-            "latent_channels": 4,
+            "latent_channels": 192,
             "out_channels": 1,
             "num_res_blocks": [2, 2, 2],
             "num_channels": [64, 128, 256],
@@ -309,7 +309,7 @@ def get_config():
             #
             loss_weights={
                 "reconstruction_loss": 1.0,
-                "perceiver_loss": 1.0,
+                "perceiver_loss": 2.0,
                 "perceptual_loss": 0.2,
                 "ms_ssim_loss": 0.1,
                 "kl_loss": 5e-6,
@@ -321,7 +321,7 @@ def get_config():
             #
             checkpointing_level=2,
             #
-            fast_dev_run=False,
+            fast_dev_run=20,
             strategy="ddp",
             #
             accumulate_grad_batches=10,
@@ -340,13 +340,18 @@ def get_config():
         "VAE",
         "Frozen MAISI",
         "Trainable perceiver",
-        "Added reconstruction loss across perceiver",
-        "Corrected input data distribution to match paper i.e. [-1000, 1000] normalized to [0.0, 1.0]",
+        "Replaced compression and expansion layers in maisi with larger dim, trainable",
+        "Removed quant layers in maisi",
+        "Increased perceiver loss weight to 2.0",
+        "Added position embeddings to perceiver input",
+        "Added layernorms before and after perceiver",
+        "Corrected relative position embeddings to all perceiver process layers",
+        # "Added back gradient clipping",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v39__2025_03_16",
+            task_name="v40__2025_03_17",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

@@ -664,7 +664,7 @@ class MaisiEncoder(nn.Module):
                 save_mem=save_mem,
             )
         )
-        blocks.append(  # Mapping 256 cahnnels to 4
+        blocks.append(
             MaisiConvolution(
                 spatial_dims=spatial_dims,
                 in_channels=num_channels[-1],

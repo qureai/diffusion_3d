@@ -1,25 +1,16 @@
 import math
 
-import lightning as L
-import numpy as np
 import torch
-from ct_pretraining.schedulers.decaying_sine import DecayingSineLR
-from einops import rearrange, reduce
+from arjcode.model import MyLightningModule
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
 from munch import Munch
-from prettytable import PrettyTable
-from torch import nn
-from torch.nn import L1Loss, MSELoss
-from torch.nn import functional as F
-from vision_architectures.layers.embeddings import AbsolutePositionEmbeddings3D
-from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoder, SwinV23DModel
-from vision_architectures.schedulers.sigmoid import SigmoidScheduler
+from torch.nn import L1Loss
 
 from diffusion_3d.chestct.autoencoder.vae.maisi.nn import AdaptiveVAE
 
 
-class AdaptiveVAELightning(L.LightningModule):
+class AdaptiveVAELightning(MyLightningModule):
     def __init__(self, model_config: dict, training_config: Munch):
         super().__init__()
         self.save_hyperparameters()
@@ -43,9 +34,6 @@ class AdaptiveVAELightning(L.LightningModule):
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
         self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=4)
-
-        self.train_metrics = []
-        self.val_metrics = []
 
         # self.kl_beta_scheduler = SigmoidScheduler()
 
@@ -182,6 +170,22 @@ class AdaptiveVAELightning(L.LightningModule):
         perceiver_in = output["encoded"]
         perceiver_out = output["unadapted"]
 
+        self.log_dict(
+            {
+                "train_perceiver/in_mean": perceiver_in.mean(),
+                "train_perceiver/in_std": perceiver_in.std(),
+                "train_perceiver/in_min": perceiver_in.min(),
+                "train_perceiver/in_max": perceiver_in.max(),
+                "train_perceiver/out_mean": perceiver_out.mean(),
+                "train_perceiver/out_std": perceiver_out.std(),
+                "train_perceiver/out_min": perceiver_out.min(),
+                "train_perceiver/out_max": perceiver_out.max(),
+            },
+            sync_dist=True,
+            on_step=True,
+            on_epoch=False,
+        )
+
         return {
             "reconstruction_loss": self.calculate_reconstruction_loss(reconstructed, x),
             "perceiver_loss": self.calculate_reconstruction_loss(perceiver_out, perceiver_in),
@@ -273,21 +277,6 @@ class AdaptiveVAELightning(L.LightningModule):
             # "encoded_sigma": encoded_sigma,
         }
 
-    def on_after_backward(self):
-        # Log gradient info
-        norm = 0.0
-        max_abs = 0.0
-        for param in self.parameters():
-            if param.grad is not None:
-                norm += param.grad.detach().norm(2).item() ** 2
-                max_abs = max(max_abs, param.grad.detach().abs().max().item())
-        norm = norm**0.5
-        try:
-            self.log("train_grad/norm", norm, sync_dist=True)
-            self.log("train_grad/max_abs", max_abs, sync_dist=True)
-        except:
-            print(f"Error in logging gradients {norm}, {max_abs}")
-
     def training_step(self, batch, batch_idx):
         return self.process_step(batch, "train", batch_idx)["all_losses"]["autoencoder_loss"]
 
@@ -296,7 +285,7 @@ class AdaptiveVAELightning(L.LightningModule):
 
     def on_train_epoch_end(self):
         # self.process_epoch("train")
-        self.print_numbers()
+        self.print_log()
 
     # def on_validation_epoch_end(self):
     #     self.process_epoch("val")
@@ -315,58 +304,11 @@ class AdaptiveVAELightning(L.LightningModule):
 
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
-    def print_numbers(self):
-        if self.global_rank != 0:
-            return
-
-        numbers = self.trainer.logged_metrics
-        numbers = list(numbers.items())
-        for i in range(len(numbers)):
-            numbers[i] = [*numbers[i][0].split("/"), round(float(numbers[i][1]), 5)]
-        numbers = sorted(numbers)
-
-        print()
-        print()
-        print("Epoch = {:<4}".format(self.current_epoch))
-        table = PrettyTable(["Header", "Metric", "Value"])
-        table.add_rows(numbers)
-        print(table)
-        print()
-
     def forward(self, x, crop_offsets, run_type="val"):
         # x: (b, d1, z1, y1, x1)
         # crop_offsets: (b, 3)
 
-        # residual_connection = self.autoencoder.residual_connection
-        # if self.training and not residual_connection.weight_scheduler.is_ready():
-        #     steps_per_epoch = (
-        #         self.trainer.estimated_stepping_batches
-        #         * self.trainer.accumulate_grad_batches
-        #         // self.trainer.max_epochs
-        #     )
-        #     residual_connection_epochs = self.training_config.residual_connection_epochs
-        #     residual_connection_steps = residual_connection_epochs * steps_per_epoch
-        #     residual_connection.set_num_steps(residual_connection_steps)
-
-        # if run_type == "train":
-        #     self.log(
-        #         "train_kl_step/residual_connection_weight",
-        #         residual_connection.weight_scheduler.get(),
-        #         sync_dist=True,
-        #         on_step=True,
-        #         on_epoch=False,
-        #     )
-
         return self.autoencoder(x, crop_offsets, run_type)
-
-    # def on_before_zero_grad(self, optimizer):
-    #     """Will print all unused parameters"""
-    #     if self.global_rank == 0:
-    #         print("Zero grad params")
-    #         for name, param in self.named_parameters():
-    #             if param.grad is None:
-    #                 print(name)
-    #         print()
 
 
 if __name__ == "__main__":
