@@ -63,14 +63,15 @@ class AdaptiveVAELightning(MyLightningModule):
         # kl_loss = kl_loss.clamp(min=self.free_bits_per_channel)
 
         # additional plotting
-        self.log_dict(
-            {
-                "train_kl_step/mu": z_mu_squared.mean(),
-                "train_kl_step/sigma": z_sigma_squared.mean(),
-                # "train_kl_step/free_bits_ratio": free_bits_ratio,
-            },
-            sync_dist=True,
-        )
+        if self.training:
+            self.log_dict(
+                {
+                    "train_kl_step/mu": z_mu_squared.mean(),
+                    "train_kl_step/sigma": z_sigma_squared.mean(),
+                    # "train_kl_step/free_bits_ratio": free_bits_ratio,
+                },
+                sync_dist=True,
+            )
 
         return kl_loss.sum(dim=1).mean()
 
@@ -170,21 +171,22 @@ class AdaptiveVAELightning(MyLightningModule):
         perceiver_in = output["encoded"]
         perceiver_out = output["unadapted"]
 
-        self.log_dict(
-            {
-                "train_perceiver/in_mean": perceiver_in.mean(),
-                "train_perceiver/in_std": perceiver_in.std(),
-                "train_perceiver/in_min": perceiver_in.min(),
-                "train_perceiver/in_max": perceiver_in.max(),
-                "train_perceiver/out_mean": perceiver_out.mean(),
-                "train_perceiver/out_std": perceiver_out.std(),
-                "train_perceiver/out_min": perceiver_out.min(),
-                "train_perceiver/out_max": perceiver_out.max(),
-            },
-            sync_dist=True,
-            on_step=True,
-            on_epoch=False,
-        )
+        if self.training:
+            self.log_dict(
+                {
+                    "train_perceiver/in_mean": perceiver_in.mean(),
+                    "train_perceiver/in_std": perceiver_in.std(),
+                    "train_perceiver/in_min": perceiver_in.min(),
+                    "train_perceiver/in_max": perceiver_in.max(),
+                    "train_perceiver/out_mean": perceiver_out.mean(),
+                    "train_perceiver/out_std": perceiver_out.std(),
+                    "train_perceiver/out_min": perceiver_out.min(),
+                    "train_perceiver/out_max": perceiver_out.max(),
+                },
+                sync_dist=True,
+                on_step=True,
+                on_epoch=False,
+            )
 
         return {
             "reconstruction_loss": self.calculate_reconstruction_loss(reconstructed, x),

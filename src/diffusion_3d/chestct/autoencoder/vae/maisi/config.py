@@ -6,9 +6,8 @@ from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
 
 
-def get_config():
+def get_config(training_image_size=(64, 64, 64)):
     # minimum_input_size = (32, 128, 128)
-    training_image_size = (64, 64, 64)
     model_config = {
         "maisi": {
             "spatial_dims": 3,
