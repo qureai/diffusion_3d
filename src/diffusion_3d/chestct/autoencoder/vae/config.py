@@ -74,7 +74,7 @@ def get_config(training_image_size=(64, 64, 64)):
             }
         )
     }
-    model_config["latent_dim"] = 16
+    model_config["latent_dim"] = model_config["encoder"].stages[-1].out_dim
     model_config["decoder"] = SwinV23DDecoderConfig.model_validate(
         {
             "dim": model_config["encoder"].stages[-1].out_dim,
@@ -121,7 +121,7 @@ def get_config(training_image_size=(64, 64, 64)):
                 },
                 {
                     "depth": 2,
-                    "num_heads": 4,
+                    "num_heads": 8,
                     "window_size": window_sizes[-4],
                     "attn_drop_prob": 0.1,
                     "proj_drop_prob": 0.1,
@@ -414,7 +414,7 @@ def get_config(training_image_size=(64, 64, 64)):
             fast_dev_run=False,
             strategy="ddp",
             #
-            accumulate_grad_batches=5,
+            accumulate_grad_batches=2,
             gradient_clip_val=None,
         )
     )
@@ -441,14 +441,12 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Separated mapper and quant layers",
-        "Increased capacity of mappers",
-        "KL annealing starts from 0",
+        "Increased latent dim",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v45__2025_03_24",
+            task_name="v46__2025_03_24",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
