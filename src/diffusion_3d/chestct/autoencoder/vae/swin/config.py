@@ -7,14 +7,12 @@ from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
 
 
-def get_config():
+def get_config(training_image_size=(64, 64, 64)):
     minimum_input_size = (32, 128, 128)
-    training_image_size = (64, 64, 64)
     window_sizes = [
         (4, 4, 4),
         (4, 4, 4),
         (4, 4, 4),
-        # (6, 6, 6),
         (4, 4, 4),
     ]
     model_config = {
@@ -60,19 +58,19 @@ def get_config():
                         "mlp_drop_prob": 0.1,
                         "max_attention_batch_size": 2**12,
                     },
-                    # {
-                    #     "patch_merging": {
-                    #         "merge_window_size": (2, 2, 2),
-                    #         "out_dim_ratio": 2,
-                    #     },
-                    #     "depth": 2,
-                    #     "num_heads": 16,
-                    #     "window_size": window_sizes[3],
-                    #     "attn_drop_prob": 0.1,
-                    #     "proj_drop_prob": 0.1,
-                    #     "mlp_drop_prob": 0.1,
-                    #     "max_attention_batch_size": 2**12,
-                    # },
+                    {
+                        "patch_merging": {
+                            "merge_window_size": (2, 2, 2),
+                            "out_dim_ratio": 2,
+                        },
+                        "depth": 2,
+                        "num_heads": 16,
+                        "window_size": window_sizes[3],
+                        "attn_drop_prob": 0.1,
+                        "proj_drop_prob": 0.1,
+                        "mlp_drop_prob": 0.1,
+                        "max_attention_batch_size": 2**12,
+                    },
                 ],
             }
         )
@@ -112,19 +110,19 @@ def get_config():
             "dim": model_config["swin"].stages[-1].out_dim,
             "drop_prob": 0.1,
             "stages": [
-                # {
-                #     "depth": 2,
-                #     "num_heads": 16,
-                #     "window_size": window_sizes[-1],
-                #     "attn_drop_prob": 0.1,
-                #     "proj_drop_prob": 0.1,
-                #     "mlp_drop_prob": 0.1,
-                #     "max_attention_batch_size": 2**12,
-                #     "patch_splitting": {
-                #         "final_window_size": (2, 2, 2),
-                #         "out_dim_ratio": 2,
-                #     },
-                # },
+                {
+                    "depth": 2,
+                    "num_heads": 16,
+                    "window_size": window_sizes[-1],
+                    "attn_drop_prob": 0.1,
+                    "proj_drop_prob": 0.1,
+                    "mlp_drop_prob": 0.1,
+                    "max_attention_batch_size": 2**12,
+                    "patch_splitting": {
+                        "final_window_size": (2, 2, 2),
+                        "out_dim_ratio": 2,
+                    },
+                },
                 {
                     "depth": 4,
                     "num_heads": 16,

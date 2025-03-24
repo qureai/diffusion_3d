@@ -10,7 +10,6 @@ from hydra.utils import instantiate
 from monai.data.dataloader import DataLoader
 from monai.data.dataset import PersistentDataset
 from monai.transforms import Compose, LoadImaged
-from safetensors import safe_open
 from sklearn.model_selection import train_test_split
 from torch.distributed import get_rank
 from torch.utils.data import WeightedRandomSampler
