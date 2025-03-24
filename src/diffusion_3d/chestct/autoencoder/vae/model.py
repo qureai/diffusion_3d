@@ -67,14 +67,17 @@ class VAELightning(MyLightningModule):
         # kl_loss = kl_loss.clamp(min=self.free_bits_per_channel)
 
         # additional plotting
-        self.log_dict(
-            {
-                "train_kl_step/mu": z_mu_squared.mean(),
-                "train_kl_step/sigma": z_sigma_squared.mean(),
-                # "train_kl_step/free_bits_ratio": free_bits_ratio,
-            },
-            sync_dist=True,
-        )
+        if self.training:
+            self.log_dict(
+                {
+                    "train_kl_step/mu": z_mu_squared.mean(),
+                    "train_kl_step/sigma": z_sigma_squared.mean(),
+                    # "train_kl_step/free_bits_ratio": free_bits_ratio,
+                },
+                sync_dist=True,
+                on_step=True,
+                on_epoch=False,
+            )
 
         return kl_loss.sum(dim=1).mean()
 
