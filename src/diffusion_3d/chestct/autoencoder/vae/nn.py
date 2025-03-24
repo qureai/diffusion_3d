@@ -186,6 +186,15 @@ if __name__ == "__main__":
     # device = torch.device("cuda:0")
 
     autoencoder = VAE(config.model, 2).to(device)
+    state_dict = torch.load(
+        r"/raid3/arjun/checkpoints/adaptive_autoencoder/v27__2025_03_07/version_0/checkpoints/last.ckpt",
+        map_location=device,
+    )["state_dict"]
+    for key in state_dict.copy().keys():
+        value = state_dict.pop(key)
+        if key.startswith("autoencoder."):
+            state_dict[key.removeprefix("autoencoder.")] = value
+    autoencoder.load_state_dict(state_dict)
     print("Encoder:")
     describe_model(autoencoder.encoder)
     print("Encoder mapper:")

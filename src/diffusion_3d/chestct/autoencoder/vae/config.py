@@ -383,15 +383,15 @@ def get_config(training_image_size=(64, 64, 64)):
             num_workers=12,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
-            train_sample_size=4_000,
+            train_sample_size=8_000,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
 
     training_config = munchify(
         dict(
-            start_from_checkpoint=None,
-            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v27__2025_03_07/version_0/checkpoints/last.ckpt",
+            # start_from_checkpoint=None,
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v46__2025_03_24/version_0/checkpoints/last.ckpt",
             #
             max_epochs=200,
             lr=5e-4,
@@ -406,7 +406,7 @@ def get_config(training_image_size=(64, 64, 64)):
                 # "spectral_loss": 1e-6,
             },
             kl_annealing_start_epoch=0,
-            kl_annealing_epochs=30,
+            kl_annealing_epochs=20,
             # free_bits=1.0,
             #
             checkpointing_level=2,
@@ -414,7 +414,7 @@ def get_config(training_image_size=(64, 64, 64)):
             fast_dev_run=False,
             strategy="ddp",
             #
-            accumulate_grad_batches=2,
+            accumulate_grad_batches=4,
             gradient_clip_val=None,
         )
     )
@@ -446,7 +446,7 @@ def get_config(training_image_size=(64, 64, 64)):
 
     additional_config = munchify(
         dict(
-            task_name="v46__2025_03_24",
+            task_name="v46__2025_03_24__epoch6",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
