@@ -1,6 +1,5 @@
 import torch
 from munch import munchify
-from vision_architectures.nets.perceiver_3d import Perceiver3DConfig
 from vision_architectures.nets.swinv2_3d import SwinV23DConfig, SwinV23DDecoderConfig
 
 from diffusion_3d.constants import SERVER_MAPPING
@@ -75,36 +74,6 @@ def get_config(training_image_size=(64, 64, 64)):
             }
         )
     }
-    model_config["adaptor"] = Perceiver3DConfig.model_validate(
-        {
-            "encode": {
-                "dim": model_config["swin"].stages[-1].out_dim,
-                "num_latent_tokens": 1024,
-                "num_layers": 2,
-                "num_heads": 16,
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
-            },
-            "process": {
-                "dim": model_config["swin"].stages[-1].out_dim,
-                "num_layers": 4,
-                "num_heads": 16,
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
-            },
-            "decode": {
-                "dim": model_config["swin"].stages[-1].out_dim,
-                "num_layers": 2,
-                "num_heads": 16,
-                "out_channels": model_config["swin"].stages[-1].out_dim,
-                "attn_drop_prob": 0.1,
-                "proj_drop_prob": 0.1,
-                "mlp_drop_prob": 0.1,
-            },
-        }
-    )
     model_config["decoder"] = SwinV23DDecoderConfig.model_validate(
         {
             "dim": model_config["swin"].stages[-1].out_dim,
@@ -169,7 +138,6 @@ def get_config(training_image_size=(64, 64, 64)):
         "in_channels": model_config["decoder"].stages[-1].out_dim,
         "out_channels": model_config["swin"].in_channels,
     }
-    model_config["pathway_drop_prob"] = 0.4
 
     latent_patch_size = model_config["swin"].patch_size
     for stage in model_config["swin"].stages:
@@ -211,7 +179,7 @@ def get_config(training_image_size=(64, 64, 64)):
             limited_dataset_size=None,
             #
             allowed_spacings=((0.4, 7), (-1, -1), (-1, -1)),
-            allowed_shapes=((96, -1), (256, -1), (256, -1)),
+            allowed_shapes=((64, -1), (256, -1), (256, -1)),
             #
             train_augmentations={
                 "_target_": "monai.transforms.Compose",
@@ -436,19 +404,17 @@ def get_config(training_image_size=(64, 64, 64)):
                 "kl_loss": 5e-6,
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=15,
+            kl_annealing_start_epoch=5,
             kl_annealing_epochs=30,
             # free_bits=1.0,
             #
-            residual_connection_epochs=25,
-            #
             checkpointing_level=2,
             #
-            fast_dev_run=False,
+            fast_dev_run=20,
             strategy="ddp",
             #
             accumulate_grad_batches=5,
-            gradient_clip_val=1.0,
+            gradient_clip_val=10.0,
         )
     )
 
@@ -473,15 +439,12 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Added back the residual connection",
-        "Reduced training size to 64",
-        "Reduced the depth of swin",
-        # "Resized input images to (256, 256) before cropping",
+        "Removed adaptor concepts",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v33__2025_03_11",
+            task_name="v42__2025_03_24",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
@@ -490,12 +453,12 @@ def get_config(training_image_size=(64, 64, 64)):
 
     distributed_config = munchify(
         dict(
-            distributed=False,
+            distributed=True,
             nodes=[
                 (node, SERVER_MAPPING[node])
                 for node in [
                     "qrnd10.internal.qure.ai",  # First one is master node
-                    "qrnd8.internal.qure.ai",
+                    "qrnd21.l40.sr.internal.qure.ai",
                 ]
             ],
         )
@@ -523,9 +486,12 @@ def get_config(training_image_size=(64, 64, 64)):
 
 
 if __name__ == "__main__":
+    from pprint import pprint
+
     from hydra.utils import instantiate
 
     config = get_config()
+    pprint(config.toDict())
 
     sample_input = torch.zeros((1, 100, 100, 100))
     transforms = instantiate(config.data.toDict()["train_augmentations"])

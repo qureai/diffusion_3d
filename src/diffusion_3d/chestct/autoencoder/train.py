@@ -1,0 +1,1 @@
+/home/ubuntu/projects/mock_training/train.py
