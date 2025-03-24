@@ -383,7 +383,7 @@ def get_config(training_image_size=(64, 64, 64)):
             num_workers=12,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
-            train_sample_size=8_000,
+            train_sample_size=4_000,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -415,7 +415,7 @@ def get_config(training_image_size=(64, 64, 64)):
             strategy="ddp",
             #
             accumulate_grad_batches=5,
-            gradient_clip_val=10.0,
+            gradient_clip_val=None,
         )
     )
 
@@ -441,12 +441,12 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Added normalization",
+        "Removed gradient clipping",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v43__2025_03_24",
+            task_name="v44__2025_03_24",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
