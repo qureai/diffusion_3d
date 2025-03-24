@@ -405,7 +405,7 @@ def get_config(training_image_size=(64, 64, 64)):
                 "kl_loss": 5e-6,
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=5,
+            kl_annealing_start_epoch=0,
             kl_annealing_epochs=30,
             # free_bits=1.0,
             #
@@ -441,12 +441,14 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Removed gradient clipping",
+        "Separated mapper and quant layers",
+        "Increased capacity of mappers",
+        "KL annealing starts from 0",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v44__2025_03_24",
+            task_name="v45__2025_03_24",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

@@ -95,11 +95,19 @@ class VAE(nn.Module):
         latent_out_dim = model_config.decoder.dim
 
         self.encoder = SwinV23DModel(model_config.encoder, checkpointing_level)
-        self.encoder_norm = LayerNorm3D(latent_in_dim)
-        self.quant_conv_mu = nn.Conv3d(latent_in_dim, latent_dim, 1)
-        self.quant_conv_log_sigma = nn.Conv3d(latent_in_dim, latent_dim, 1)
-        self.post_quant_conv = nn.Conv3d(latent_dim, latent_out_dim, 1)
-        self.decoder_norm = LayerNorm3D(latent_out_dim)
+        self.encoder_mapping = nn.Sequential(
+            nn.Conv3d(latent_in_dim, latent_dim, kernel_size=3, padding=1),
+            LayerNorm3D(latent_dim),
+            nn.GELU(),
+        )
+        self.quant_conv_mu = nn.Conv3d(latent_dim, latent_dim, 1)
+        self.quant_conv_log_sigma = nn.Conv3d(latent_dim, latent_dim, 1)
+        self.post_quant_conv = nn.Conv3d(latent_dim, latent_dim, 1)
+        self.decoder_mapping = nn.Sequential(
+            nn.Conv3d(latent_dim, latent_out_dim, kernel_size=3, padding=1),
+            LayerNorm3D(latent_out_dim),
+            nn.GELU(),
+        )
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
         self.unembedding = UnembeddingLayer(model_config.unembedding)
 
@@ -114,7 +122,7 @@ class VAE(nn.Module):
             )
             cur_crop_offset = scaled_crop_offsets[-1].clone()
 
-        encoded = self.encoder_norm(encoded)
+        encoded = self.encoder_mapping(encoded)
 
         z_mu = self.quant_conv_mu(encoded)
         z_log_var = self.quant_conv_log_sigma(encoded)
@@ -133,7 +141,7 @@ class VAE(nn.Module):
     def decode(self, z: torch.Tensor, encoder_output, scaled_crop_offsets):
         sampled = self.post_quant_conv(z)
 
-        sampled = self.decoder_norm(sampled)
+        sampled = self.decoder_mapping(sampled)
 
         sampled = rearrange(sampled, "b d z y x -> b z y x d")
         decoded, _, _ = self.decoder(sampled)
@@ -175,11 +183,15 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    device = torch.device("cuda:0")
+    # device = torch.device("cuda:0")
 
     autoencoder = VAE(config.model, 2).to(device)
     print("Encoder:")
     describe_model(autoencoder.encoder)
+    print("Encoder mapper:")
+    describe_model(autoencoder.encoder_mapping)
+    print("Decoder mapper:")
+    describe_model(autoencoder.decoder_mapping)
     print("Decoder:")
     describe_model(autoencoder.decoder)
     print("Final layer:")
