@@ -15,7 +15,7 @@ def get_config(training_image_size=(64, 64, 64)):
         (4, 4, 4),
     ]
     model_config = {
-        "swin": SwinV23DConfig.model_validate(
+        "encoder": SwinV23DConfig.model_validate(
             {
                 "patch_size": (2, 2, 2),
                 "in_channels": 1,
@@ -74,9 +74,10 @@ def get_config(training_image_size=(64, 64, 64)):
             }
         )
     }
+    model_config["latent_dim"] = 8
     model_config["decoder"] = SwinV23DDecoderConfig.model_validate(
         {
-            "dim": model_config["swin"].stages[-1].out_dim,
+            "dim": model_config["encoder"].stages[-1].out_dim,
             "drop_prob": 0.1,
             "stages": [
                 {
@@ -132,15 +133,15 @@ def get_config(training_image_size=(64, 64, 64)):
     )
     model_config["unembedding"] = {
         "num_upsamples": 1,
-        "upsample_channels": [
+        "upsample_dims": [
             model_config["decoder"].stages[-1].out_dim // 2,
         ],
-        "in_channels": model_config["decoder"].stages[-1].out_dim,
-        "out_channels": model_config["swin"].in_channels,
+        "in_dim": model_config["decoder"].stages[-1].out_dim,
+        "out_channels": model_config["encoder"].in_channels,
     }
 
-    latent_patch_size = model_config["swin"].patch_size
-    for stage in model_config["swin"].stages:
+    latent_patch_size = model_config["encoder"].patch_size
+    for stage in model_config["encoder"].stages:
         latent_patch_size = stage.get_out_patch_size(latent_patch_size)
     # latent_patch_size = (64, 64, 64)
     training_latent_grid_size = tuple(size // patch for size, patch in zip(training_image_size, latent_patch_size))
@@ -148,7 +149,7 @@ def get_config(training_image_size=(64, 64, 64)):
 
     batch_size = 60
     num_train_samples_per_datapoint = 5
-    num_val_samples_per_datapoint = 20
+    num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
 
@@ -379,7 +380,7 @@ def get_config(training_image_size=(64, 64, 64)):
                 ],
             },
             #
-            num_workers=16,
+            num_workers=12,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
             train_sample_size=4_000,
@@ -418,22 +419,23 @@ def get_config(training_image_size=(64, 64, 64)):
         )
     )
 
-    patch_sizes = [model_config["swin"].patch_size]
-    for i in range(len(model_config["swin"].stages)):
-        patch_sizes.append(model_config["swin"].stages[i].get_out_patch_size(patch_sizes[-1]))
+    patch_sizes = [model_config["encoder"].patch_size]
+    for i in range(len(model_config["encoder"].stages)):
+        patch_sizes.append(model_config["encoder"].stages[i].get_out_patch_size(patch_sizes[-1]))
     grid_sizes = []
-    for i in range(len(model_config["swin"].stages) + 1):
+    for i in range(len(model_config["encoder"].stages) + 1):
         grid_sizes.append(tuple([size // patch for size, patch in zip(training_image_size, patch_sizes[i])]))
     # Ensure grid size can be divided by window size
-    for i in range(len(model_config["swin"].stages)):
+    for i in range(len(model_config["encoder"].stages)):
         assert all(
-            [grid % window == 0 for grid, window in zip(grid_sizes[i], model_config["swin"].stages[i].window_size)]
-        ), f"{grid_sizes[i]} is not divisible by {model_config['swin'].stages[i].window_size}"
+            [grid % window == 0 for grid, window in zip(grid_sizes[i], model_config["encoder"].stages[i].window_size)]
+        ), f"{grid_sizes[i]} is not divisible by {model_config['encoder'].stages[i].window_size}"
     clearml_tags = [
         f"Training image size: {training_image_size}",
         f"Patch sizes: {patch_sizes}",
         f"Grid sizes: {grid_sizes}",
-        f"Dimensions: {[stage.out_dim for stage in model_config['swin'].stages]}",
+        f"Dimensions: {[stage.out_dim for stage in model_config['encoder'].stages]}",
+        f"Latent dimensions: {model_config['latent_dim']}",
         f"Train batch size: {data_config.train_batch_size}",
         f"Compression: {compression_factor}",
         f"Checkpointing level: {training_config.checkpointing_level}",

@@ -5,7 +5,7 @@ from config import get_config
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from diffusion_3d.chestct.autoencoder.vae.swin.model import VAELightning
+from diffusion_3d.chestct.autoencoder.vae.model import VAELightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
 
 torch.set_float32_matmul_precision("medium")
@@ -48,16 +48,12 @@ datamodule = CTRATEDataModule(config.data)
 # Add model size tags to clearml
 if task is not None:
     encoder_params = sum(p.numel() for p in model.autoencoder.encoder.parameters())
-    # perceiver_params = sum(p.numel() for p in model.autoencoder.adapt.parameters()) + sum(
-    #     p.numel() for p in model.autoencoder.unadapt.parameters()
-    # )
     decoder_params = sum(p.numel() for p in model.autoencoder.decoder.parameters())
     total_params = sum(p.numel() for p in model.autoencoder.parameters())
     any_other_params = total_params - (encoder_params + decoder_params)
     task.add_tags(
         [
             f"Encoder: {encoder_params:,} params",
-            # f"Perceiver: {perceiver_params:,} params",
             f"Decoder: {decoder_params:,} params",
             f"Other: {any_other_params:,} params",
             f"Total: {total_params:,} params",
