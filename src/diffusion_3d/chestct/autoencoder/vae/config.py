@@ -411,7 +411,7 @@ def get_config(training_image_size=(64, 64, 64)):
             #
             checkpointing_level=2,
             #
-            fast_dev_run=20,
+            fast_dev_run=False,
             strategy="ddp",
             #
             accumulate_grad_batches=5,
