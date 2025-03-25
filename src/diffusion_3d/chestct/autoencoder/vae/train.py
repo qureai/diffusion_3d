@@ -42,6 +42,7 @@ if config.training.start_from_checkpoint is not None:
         strict=False,
         map_location="cpu",
     )
+    model.autoencoder.reinit()
     print(f"Started from: {config.training.start_from_checkpoint}")
 else:
     model = VAELightning(config.model, config.training)

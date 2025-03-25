@@ -147,7 +147,7 @@ def get_config(training_image_size=(64, 64, 64)):
     training_latent_grid_size = tuple(size // patch for size, patch in zip(training_image_size, latent_patch_size))
     compression_factor = tuple(training_image_size[i] // training_latent_grid_size[i] for i in range(3))
 
-    batch_size = 60
+    batch_size = 20
     num_train_samples_per_datapoint = 5
     num_val_samples_per_datapoint = batch_size
 
@@ -180,7 +180,7 @@ def get_config(training_image_size=(64, 64, 64)):
             limited_dataset_size=None,
             #
             allowed_spacings=((0.4, 7), (-1, -1), (-1, -1)),
-            allowed_shapes=((64, -1), (256, -1), (256, -1)),
+            allowed_shapes=((128, -1), (256, -1), (256, -1)),
             #
             train_augmentations={
                 "_target_": "monai.transforms.Compose",
@@ -390,8 +390,8 @@ def get_config(training_image_size=(64, 64, 64)):
 
     training_config = munchify(
         dict(
-            # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v46__2025_03_24/version_0/checkpoints/last.ckpt",
+            start_from_checkpoint=None,
+            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v46__2025_03_24__epoch6/version_0/checkpoints/last.ckpt",
             #
             max_epochs=200,
             lr=5e-4,
@@ -402,20 +402,20 @@ def get_config(training_image_size=(64, 64, 64)):
                 "reconstruction_loss": 1.0,
                 "perceptual_loss": 0.2,
                 "ms_ssim_loss": 0.1,
-                "kl_loss": 5e-6,
+                "kl_loss": 5e-5,
                 # "spectral_loss": 1e-6,
             },
             kl_annealing_start_epoch=0,
             kl_annealing_epochs=20,
             # free_bits=1.0,
             #
-            checkpointing_level=2,
+            checkpointing_level=1,
             #
             fast_dev_run=False,
             strategy="ddp",
             #
-            accumulate_grad_batches=4,
-            gradient_clip_val=None,
+            accumulate_grad_batches=10,
+            gradient_clip_val=1.0,
         )
     )
 
@@ -441,12 +441,15 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Increased latent dim",
+        "Added back gradient clipping",
+        "Initialized mu and logsigma quant layers",
+        "Increased KL loss weight",
+        "Removed mapping layers",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v46__2025_03_24__epoch6",
+            task_name="v47__2025_03_25",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

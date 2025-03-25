@@ -180,10 +180,12 @@ class VAELightning(MyLightningModule):
         }
 
     def calculate_metrics(self, x, reconstructed):
-        return {
+        metrics = {
             "psnr": self.calculate_psnr(reconstructed, x),
             "ms_ssim": self.calculate_ms_ssim(reconstructed, x),
         }
+        metrics["ms_ssim_10"] = metrics["ms_ssim"] * 10
+        return metrics
 
     def calculate_autoencoder_loss(self, all_losses):
         # Apply beta annealing
