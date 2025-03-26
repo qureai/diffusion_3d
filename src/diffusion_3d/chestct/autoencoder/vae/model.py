@@ -184,7 +184,6 @@ class VAELightning(MyLightningModule):
             "psnr": self.calculate_psnr(reconstructed, x),
             "ms_ssim": self.calculate_ms_ssim(reconstructed, x),
         }
-        metrics["ms_ssim_10"] = metrics["ms_ssim"] * 10
         return metrics
 
     def calculate_autoencoder_loss(self, all_losses):
@@ -304,7 +303,7 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    device = torch.device("cuda:0")
+    # device = torch.device("cuda:0")
 
     autoencoder = VAELightning(config.model, config.training).to(device)
 

@@ -74,7 +74,7 @@ def get_config(training_image_size=(64, 64, 64)):
             }
         )
     }
-    model_config["latent_dim"] = model_config["encoder"].stages[-1].out_dim
+    model_config["latent_dim"] = 8  # model_config["encoder"].stages[-1].out_dim
     model_config["decoder"] = SwinV23DDecoderConfig.model_validate(
         {
             "dim": model_config["encoder"].stages[-1].out_dim,
@@ -180,7 +180,7 @@ def get_config(training_image_size=(64, 64, 64)):
             limited_dataset_size=None,
             #
             allowed_spacings=((0.4, 7), (-1, -1), (-1, -1)),
-            allowed_shapes=((128, -1), (256, -1), (256, -1)),
+            allowed_shapes=((training_image_size[0], -1), (256, -1), (256, -1)),
             #
             train_augmentations={
                 "_target_": "monai.transforms.Compose",
@@ -390,8 +390,8 @@ def get_config(training_image_size=(64, 64, 64)):
 
     training_config = munchify(
         dict(
-            start_from_checkpoint=None,
-            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v46__2025_03_24__epoch6/version_0/checkpoints/last.ckpt",
+            # start_from_checkpoint=None,
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v47__2025_03_25/version_0/checkpoints/last.ckpt",
             #
             max_epochs=200,
             lr=5e-4,
@@ -402,11 +402,11 @@ def get_config(training_image_size=(64, 64, 64)):
                 "reconstruction_loss": 1.0,
                 "perceptual_loss": 0.2,
                 "ms_ssim_loss": 0.1,
-                "kl_loss": 5e-5,
+                "kl_loss": 1e-4,
                 # "spectral_loss": 1e-6,
             },
             kl_annealing_start_epoch=0,
-            kl_annealing_epochs=20,
+            kl_annealing_epochs=5,
             # free_bits=1.0,
             #
             checkpointing_level=1,
@@ -441,15 +441,16 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "Added back gradient clipping",
-        "Initialized mu and logsigma quant layers",
         "Increased KL loss weight",
-        "Removed mapping layers",
+        "Added back mappers. Mapping to much smaller space",
+        "Frozen encoder and decoder",
+        "KL annealing only for 5 epochs",
+        # "Increased input image size",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v47__2025_03_25",
+            task_name="v48__2025_03_26__v47",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

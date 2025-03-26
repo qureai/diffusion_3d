@@ -95,19 +95,19 @@ class VAE(nn.Module):
         latent_out_dim = model_config.decoder.dim
 
         self.encoder = SwinV23DModel(model_config.encoder, checkpointing_level)
-        # self.encoder_mapping = nn.Sequential(
-        #     nn.Conv3d(latent_in_dim, latent_dim, kernel_size=3, padding=1),
-        #     LayerNorm3D(latent_dim),
-        #     nn.GELU(),
-        # )
+        self.encoder_mapping = nn.Sequential(
+            nn.Conv3d(latent_in_dim, latent_dim, kernel_size=3, padding=1),
+            LayerNorm3D(latent_dim),
+            nn.GELU(),
+        )
         self.quant_conv_mu = nn.Conv3d(latent_dim, latent_dim, 1)
         self.quant_conv_log_var = nn.Conv3d(latent_dim, latent_dim, 1)
         self.post_quant_conv = nn.Conv3d(latent_dim, latent_dim, 1)
-        # self.decoder_mapping = nn.Sequential(
-        #     nn.Conv3d(latent_dim, latent_out_dim, kernel_size=3, padding=1),
-        #     LayerNorm3D(latent_out_dim),
-        #     nn.GELU(),
-        # )
+        self.decoder_mapping = nn.Sequential(
+            nn.Conv3d(latent_dim, latent_out_dim, kernel_size=3, padding=1),
+            LayerNorm3D(latent_out_dim),
+            nn.GELU(),
+        )
         self.decoder = SwinV23DDecoder(model_config.decoder, checkpointing_level)
         self.unembedding = UnembeddingLayer(model_config.unembedding)
 
@@ -118,9 +118,6 @@ class VAE(nn.Module):
         nn.init.zeros_(self.quant_conv_mu.bias)
         nn.init.zeros_(self.quant_conv_log_var.weight)
         nn.init.constant_(self.quant_conv_log_var.bias, -10.0)
-
-    def reinit(self):
-        self.init()
 
     def encode(self, x: torch.Tensor, crop_offsets: torch.Tensor = None, return_stage_outputs=False):
         encoded, stage_outputs, _ = self.encoder(x, crop_offsets=crop_offsets)
@@ -133,7 +130,7 @@ class VAE(nn.Module):
             )
             cur_crop_offset = scaled_crop_offsets[-1].clone()
 
-        # encoded = self.encoder_mapping(encoded)
+        encoded = self.encoder_mapping(encoded)
 
         z_mu = self.quant_conv_mu(encoded)
         z_log_var = self.quant_conv_log_var(encoded)
@@ -152,7 +149,7 @@ class VAE(nn.Module):
     def decode(self, z: torch.Tensor, encoder_output, scaled_crop_offsets):
         sampled = self.post_quant_conv(z)
 
-        # sampled = self.decoder_mapping(sampled)
+        sampled = self.decoder_mapping(sampled)
 
         sampled = rearrange(sampled, "b d z y x -> b z y x d")
         decoded, _, _ = self.decoder(sampled)
@@ -194,18 +191,19 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    # device = torch.device("cuda:0")
+    device = torch.device("cuda:0")
 
-    autoencoder = VAE(config.model, 2).to(device)
+    autoencoder = VAE(config.model, 1).to(device)
     state_dict = torch.load(
-        r"/raid3/arjun/checkpoints/adaptive_autoencoder/v27__2025_03_07/version_0/checkpoints/last.ckpt",
+        r"/raid3/arjun/checkpoints/adaptive_autoencoder/v47__2025_03_25/version_0/checkpoints/last.ckpt",
         map_location=device,
     )["state_dict"]
     for key in state_dict.copy().keys():
         value = state_dict.pop(key)
-        if key.startswith("autoencoder."):
+        if key.startswith("autoencoder.") and not "quant" in key:
             state_dict[key.removeprefix("autoencoder.")] = value
-    autoencoder.load_state_dict(state_dict)
+    autoencoder.load_state_dict(state_dict, strict=False)
+    autoencoder.init()
     print("Encoder:")
     describe_model(autoencoder.encoder)
     print("Encoder mapper:")
