@@ -277,7 +277,7 @@ class VAELightning(MyLightningModule):
         self.print_log()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.training_config.lr)
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.parameters()), lr=self.training_config.lr)
 
         total_steps = self.trainer.estimated_stepping_batches
         # scheduler = DecayingSineLR(optimizer, 1e-6, self.training_config.lr, total_steps // 4, 0.5)

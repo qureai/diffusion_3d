@@ -117,7 +117,7 @@ class VAE(nn.Module):
         # nn.init.ones_(self.quant_conv_mu.weight)
         nn.init.zeros_(self.quant_conv_mu.bias)
         nn.init.zeros_(self.quant_conv_log_var.weight)
-        nn.init.constant_(self.quant_conv_log_var.bias, -10.0)
+        nn.init.constant_(self.quant_conv_log_var.bias, -3.0)
 
     def encode(self, x: torch.Tensor, crop_offsets: torch.Tensor = None, return_stage_outputs=False):
         encoded, stage_outputs, _ = self.encoder(x, crop_offsets=crop_offsets)

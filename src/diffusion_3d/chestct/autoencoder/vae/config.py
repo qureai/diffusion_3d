@@ -147,7 +147,7 @@ def get_config(training_image_size=(64, 64, 64)):
     training_latent_grid_size = tuple(size // patch for size, patch in zip(training_image_size, latent_patch_size))
     compression_factor = tuple(training_image_size[i] // training_latent_grid_size[i] for i in range(3))
 
-    batch_size = 20
+    batch_size = 35
     num_train_samples_per_datapoint = 5
     num_val_samples_per_datapoint = batch_size
 
