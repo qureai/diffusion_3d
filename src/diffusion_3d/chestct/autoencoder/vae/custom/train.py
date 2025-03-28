@@ -35,29 +35,13 @@ if not config.training.fast_dev_run and config.additional.log_on_clearml:
 
 # Create model and datamodule
 if config.training.start_from_checkpoint is not None:
-    # model = VAELightning.load_from_checkpoint(
-    #     config.training.start_from_checkpoint,
-    #     model_config=config.model,
-    #     training_config=config.training,
-    #     strict=False,
-    #     map_location="cpu",
-    # )
-    model = VAELightning(config.model, config.training)
-    state_dict = torch.load(config.training.start_from_checkpoint, map_location="cpu", weights_only=False)["state_dict"]
-    for key in state_dict.copy().keys():
-        value = state_dict.pop(key)
-        if key.startswith("autoencoder.") and "quant" not in key:
-            state_dict[key.removeprefix("autoencoder.")] = value
-    model.autoencoder.load_state_dict(state_dict, strict=False)
-    model.autoencoder.init()
-    modules = [model.autoencoder.encoder, model.autoencoder.decoder, model.autoencoder.unembedding]
-    for module in modules:
-        module.eval()
-        for name, param in module.named_parameters():
-            param.requires_grad = False
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(f"{name} is trainable")
+    model = VAELightning.load_from_checkpoint(
+        config.training.start_from_checkpoint,
+        model_config=config.model,
+        training_config=config.training,
+        strict=False,
+        map_location="cpu",
+    )
     print(f"Started from: {config.training.start_from_checkpoint}")
 else:
     model = VAELightning(config.model, config.training)

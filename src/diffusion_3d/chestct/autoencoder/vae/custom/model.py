@@ -101,7 +101,7 @@ class VAELightning(MyLightningModule):
                 on_epoch=False,
             )
 
-        return kl_loss.mean(dim=1).sum()
+        return kl_loss.mean(dim=0).sum()
 
     def calculate_spectral_loss(self, mu, logvar, eps=1e-6, normalize_by_dim=True, spatial_average=True):
         b, dim, z, y, x = mu.shape

@@ -9,7 +9,6 @@ from vision_architectures.nets.maxvit_3d import MaxViT3DStem0
 from vision_architectures.nets.swinv2_3d import SwinV23DBlock, SwinV23DPatchMerging, SwinV23DPatchSplitting
 from vision_architectures.utils.activation_checkpointing import ActivationCheckpointing
 from vision_architectures.utils.rearrange import rearrange_channels
-from vision_architectures.utils.residuals import Residual
 
 
 class ResBlock(nn.Module):
@@ -21,8 +20,6 @@ class ResBlock(nn.Module):
             self.layers.append(MBConv3D(config, checkpointing_level=checkpointing_level))
             self.layers.append(SwinV23DBlock(config, checkpointing_level=checkpointing_level))
 
-        self.residual = Residual()
-
         self.checkpointing_level3 = ActivationCheckpointing(3, checkpointing_level)
 
     def _forward(self, x: torch.Tensor, channels_first: bool = True):
@@ -32,13 +29,9 @@ class ResBlock(nn.Module):
         # (b, dim, z1, y1, x1)
 
         for i in range(0, len(self.layers), 2):
-            residual = x
-
             x = self.layers[i](x, channels_first=True)  # mbconv
             x = self.layers[i + 1](x, channels_first=True)  # attention
             # (b, dim, z1, y1, x1)
-
-            x = self.residual(residual, x)
 
         x = rearrange_channels(x, True, channels_first)
         # (b, [dim], z1, y1, x1, [dim])
