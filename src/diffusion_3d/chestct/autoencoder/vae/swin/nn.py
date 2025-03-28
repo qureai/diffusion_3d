@@ -117,10 +117,10 @@ class VAE(nn.Module):
         # nn.init.ones_(self.quant_conv_mu.weight)
         nn.init.zeros_(self.quant_conv_mu.bias)
         nn.init.zeros_(self.quant_conv_log_var.weight)
-        nn.init.constant_(self.quant_conv_log_var.bias, -3.0)
+        nn.init.constant_(self.quant_conv_log_var.bias, 0.0)
 
-    def encode(self, x: torch.Tensor, crop_offsets: torch.Tensor = None, return_stage_outputs=False):
-        encoded, stage_outputs, _ = self.encoder(x, crop_offsets=crop_offsets)
+    def encode(self, x: torch.Tensor, crop_offsets: torch.Tensor = None):
+        encoded = self.encoder(x, crop_offsets=crop_offsets)
 
         scaled_crop_offsets = []
         cur_crop_offset = crop_offsets.clone()
@@ -137,8 +137,6 @@ class VAE(nn.Module):
         z_log_var = torch.clamp(z_log_var, -30.0, 20.0)
         z_sigma = torch.exp(z_log_var / 2)
 
-        if return_stage_outputs:
-            return z_mu, z_sigma, encoded, scaled_crop_offsets, stage_outputs
         return z_mu, z_sigma, encoded, scaled_crop_offsets
 
     def sampling(self, z_mu: torch.Tensor, z_sigma: torch.Tensor) -> torch.Tensor:
@@ -148,13 +146,8 @@ class VAE(nn.Module):
 
     def decode(self, z: torch.Tensor, encoder_output, scaled_crop_offsets):
         sampled = self.post_quant_conv(z)
-
         sampled = self.decoder_mapping(sampled)
-
-        sampled = rearrange(sampled, "b d z y x -> b z y x d")
-        decoded, _, _ = self.decoder(sampled)
-        decoded = rearrange(decoded, "b z y x d -> b d z y x")
-
+        decoded = self.decoder(sampled)
         return decoded
 
     def forward(self, x, crop_offsets, run_type="val"):
