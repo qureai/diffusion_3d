@@ -24,8 +24,8 @@ def get_config(training_image_size=(64, 64, 64)):
         }
     )
 
-    batch_size = 70
-    num_train_samples_per_datapoint = 5
+    batch_size = 110
+    num_train_samples_per_datapoint = 10
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -311,6 +311,7 @@ def get_config(training_image_size=(64, 64, 64)):
         "VAE",
         "MultiResCNN architecture",
         "Delayed KL annealing by 10 epochs",
+        "Added Stochastic Depth Dropout",
     ]
 
     additional_config = munchify(

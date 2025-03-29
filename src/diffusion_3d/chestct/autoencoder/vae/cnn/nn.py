@@ -139,9 +139,9 @@ class VAE(nn.Module):
             kernel_size=3,
         )
 
-        # if model_config.survival_prob > 0.0:
-        #     self.encoder = add_stochastic_depth_dropout(self.encoder, model_config.survival_prob)
-        #     self.decoder = add_stochastic_depth_dropout(self.decoder, model_config.survival_prob)
+        if model_config.survival_prob > 0.0:
+            self.encoder = add_stochastic_depth_dropout(self.encoder, model_config.survival_prob)
+            self.decoder = add_stochastic_depth_dropout(self.decoder, model_config.survival_prob)
 
     def forward(self, x):
         x = self.encoder_mapping(x)
@@ -183,7 +183,7 @@ if __name__ == "__main__":
     process = psutil.Process()
     initial_mem = process.memory_info().rss  # in bytes
 
-    sample_input = torch.zeros((75, 1, *config.image_size)).to(device)
+    sample_input = torch.zeros((90, 1, *config.image_size)).to(device)
 
     tic = perf_counter()
     sample_output = autoencoder(sample_input)
