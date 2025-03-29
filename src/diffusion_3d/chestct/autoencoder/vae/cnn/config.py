@@ -12,16 +12,14 @@ def get_config(training_image_size=(64, 64, 64)):
             "num_channels": [12, 24, 48, 96, 192],
             "depths": [2, 2, 4, 4, 8],
             "drop_prob": 0.1,
-            "normalization": "layernorm3d",
-            "activation": "gelu",
+            # "activation": "gelu",
             "survival_prob": 0.95,
             "latent": {
                 "dim": 192,
                 "latent_dim": 16,
                 "kernel_size": 3,
                 "drop_prob": 0.1,
-                "normalization": "layernorm3d",
-                "activation": "gelu",
+                # "activation": "gelu",
             },
         }
     )

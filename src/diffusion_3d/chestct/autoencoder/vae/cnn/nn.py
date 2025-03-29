@@ -23,13 +23,13 @@ class StageBlock(nn.Module):
         # x: (b, [dim], z, y, x, [dim])
 
         x = rearrange_channels(x, channels_first, True)
-        # (b, dim, z1, y1, x1)
+        # (b, dim, z, y, x)
 
         x = self.layers(x)
-        # (b, dim, z1, y1, x1)
+        # (b, dim, z, y, x)
 
         x = rearrange_channels(x, True, channels_first)
-        # (b, [dim], z1, y1, x1, [dim])
+        # (b, [dim], z, y, x, [dim])
 
         return x
 
@@ -139,9 +139,9 @@ class VAE(nn.Module):
             kernel_size=3,
         )
 
-        if model_config.survival_prob > 0.0:
-            self.encoder = add_stochastic_depth_dropout(self.encoder, model_config.survival_prob)
-            self.decoder = add_stochastic_depth_dropout(self.decoder, model_config.survival_prob)
+        # if model_config.survival_prob > 0.0:
+        #     self.encoder = add_stochastic_depth_dropout(self.encoder, model_config.survival_prob)
+        #     self.decoder = add_stochastic_depth_dropout(self.decoder, model_config.survival_prob)
 
     def forward(self, x):
         x = self.encoder_mapping(x)

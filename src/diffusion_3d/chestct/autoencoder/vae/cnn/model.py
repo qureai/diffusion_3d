@@ -13,7 +13,10 @@ from diffusion_3d.chestct.autoencoder.vae.cnn.nn import VAE
 
 class VAELightning(MyLightningModule):
     def __init__(self, model_config: dict, training_config: Munch):
-        super().__init__()
+        super().__init__(
+            # print_small_gradient_norms=True,
+            # print_large_gradient_norms=True,
+        )
         self.save_hyperparameters()
 
         self.model_config = model_config

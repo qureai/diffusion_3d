@@ -48,6 +48,34 @@ else:
 datamodule = CTRATEDataModule(config.data)
 
 
+# def forward_hook(module, inputs, output):
+#     if not module.training:
+#         return
+#     if "CNN" not in module.__class__.__name__:
+#         return
+
+#     try:
+#         input = inputs[0]
+
+#         if isinstance(input, torch.Tensor) and isinstance(output, torch.Tensor):
+#             print(
+#                 input.min().detach().cpu().item(),
+#                 input.max().detach().cpu().item(),
+#                 output.min().detach().cpu().item(),
+#                 output.max().detach().cpu().item(),
+#                 module.__class__.__name__,
+#                 sep="\t",
+#             )
+#         else:
+#             raise
+#     except:
+#         print(type(inputs), type(output), module.__class__.__name__)
+
+
+# for name, module in model.autoencoder.named_modules():
+#     module.register_forward_hook(forward_hook)
+
+
 # Add model size tags to clearml
 if task is not None:
     encoder_params = sum(p.numel() for p in model.autoencoder.encoder.parameters())
