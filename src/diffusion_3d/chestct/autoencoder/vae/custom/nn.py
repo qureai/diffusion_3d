@@ -147,6 +147,11 @@ class VAE(nn.Module):
         self.latent_space = GaussianLatentSpace()
         self.decoder = Decoder(model_config.decoder, checkpointing_level)
 
+        from arjcode.model import freeze_module
+
+        self.encoder[-1].init_zero_var()
+        freeze_module(self.encoder[-1].quant_conv_log_var)
+
     def forward(self, x):
         # x: (b, d1, z1, y1, x1)
 

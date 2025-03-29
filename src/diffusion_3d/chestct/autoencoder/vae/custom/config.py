@@ -410,7 +410,7 @@ def get_config(training_image_size=(64, 64, 64)):
                 "reconstruction_loss": 1.0,
                 "perceptual_loss": 0.2,
                 "ms_ssim_loss": 0.1,
-                "kl_loss": 1e-5,
+                "kl_loss": 5e-6,
                 # "spectral_loss": 1e-6,
             },
             kl_annealing_start_epoch=0,
@@ -441,11 +441,12 @@ def get_config(training_image_size=(64, 64, 64)):
         #
         "VAE",
         "MBConv+SwinV2 architecture",
+        "Trying it as a pseudo-autoencoder",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v49__2025_03_28",
+            task_name="v50__2025_03_29",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
