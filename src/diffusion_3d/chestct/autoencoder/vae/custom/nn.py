@@ -149,7 +149,7 @@ class VAE(nn.Module):
 
         from arjcode.model import freeze_module
 
-        self.encoder[-1].init_zero_var()
+        self.encoder[-1].init_low_var(-5.0)
         freeze_module(self.encoder[-1].quant_conv_log_var)
 
     def forward(self, x):
