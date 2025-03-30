@@ -164,13 +164,26 @@ if __name__ == "__main__":
     import psutil
     from arjcode.visualize import describe_model
     from config import get_config
+    from monai.networks.nets.autoencoderkl import AutoencoderKL
 
     config = get_config()
 
     device = torch.device("cpu")
     device = torch.device("cuda:0")
 
-    autoencoder = VAE(config.model, 0).to(device)
+    # autoencoder = VAE(config.model, 0).to(device)
+    autoencoder = AutoencoderKL(
+        spatial_dims=3,
+        in_channels=config.model.in_channels,
+        out_channels=config.model.in_channels,
+        num_res_blocks=config.model.depths,
+        channels=config.model.num_channels,
+        attention_levels=[False] * len(config.model.depths),
+        norm_num_groups=config.model.num_channels[0],
+        latent_channels=config.model.latent.latent_dim,
+        with_encoder_nonlocal_attn=False,
+        with_decoder_nonlocal_attn=False,
+    ).to(device)
     print("Encoder:")
     describe_model(autoencoder.encoder)
     print("Decoder:")
@@ -183,14 +196,14 @@ if __name__ == "__main__":
     process = psutil.Process()
     initial_mem = process.memory_info().rss  # in bytes
 
-    sample_input = torch.zeros((90, 1, *config.image_size)).to(device)
+    sample_input = torch.zeros((1, 1, *config.image_size)).to(device)
 
     tic = perf_counter()
     sample_output = autoencoder(sample_input)
     toc = perf_counter()
     forward_time = toc - tic
 
-    loss: torch.Tensor = sample_output["reconstructed"].sum()
+    loss: torch.Tensor = sample_output[0].sum()
     tic = perf_counter()
     loss.backward()
     toc = perf_counter()
@@ -202,18 +215,34 @@ if __name__ == "__main__":
     print("Input shape:", sample_input.shape)
     print()
     print("Outputs:")
-    print("Reconstructed:", sample_output["reconstructed"].shape)
-    print("z_mu:", sample_output["z_mu"].shape)
-    print("z_sigma:", sample_output["z_sigma"].shape)
-    print("kl_loss:", sample_output["kl_loss"])
+    print("Reconstructed:", sample_output[0].shape)
+    print("z_mu:", sample_output[1].shape)
+    print("z_sigma:", sample_output[2].shape)
     print()
     print(f"GPU: {torch.cuda.max_memory_allocated() / 2**30} GB peak mem used")
     print(f"RAM: {(final_mem - initial_mem) / 2**30} GB peak mem used")
     print(f"Time (forward): {forward_time:.3f} s")
     print(f"Time (backward): {backward_time:.3f} s")
 
-    # losses = autoencoder.training_step({"scan": sample_input, "spacing": ...}, 0)
-    # from pprint import pprint
-    # pprint(losses)
-    # pprint(losses)
-    # pprint(losses)
+    # -----
+    # loss: torch.Tensor = sample_output["reconstructed"].sum()
+    # tic = perf_counter()
+    # loss.backward()
+    # toc = perf_counter()
+    # backward_time = toc - tic
+
+    # final_mem = process.memory_info().rss  # in bytes
+
+    # print()
+    # print("Input shape:", sample_input.shape)
+    # print()
+    # print("Outputs:")
+    # print("Reconstructed:", sample_output["reconstructed"].shape)
+    # print("z_mu:", sample_output["z_mu"].shape)
+    # print("z_sigma:", sample_output["z_sigma"].shape)
+    # print("kl_loss:", sample_output["kl_loss"])
+    # print()
+    # print(f"GPU: {torch.cuda.max_memory_allocated() / 2**30} GB peak mem used")
+    # print(f"RAM: {(final_mem - initial_mem) / 2**30} GB peak mem used")
+    # print(f"Time (forward): {forward_time:.3f} s")
+    # print(f"Time (backward): {backward_time:.3f} s")

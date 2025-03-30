@@ -11,23 +11,23 @@ def get_config(training_image_size=(64, 64, 64)):
             "in_channels": 1,
             "num_channels": [12, 24, 48, 96, 192],
             "depths": [2, 2, 4, 4, 8],
-            "drop_prob": 0.1,
-            "normalization": "instancenorm3d",
-            "activation": "prelu",
-            "survival_prob": 0.95,
+            # "drop_prob": 0.1,
+            # "normalization": "instancenorm3d",
+            # "activation": "prelu",
+            # "survival_prob": 0.95,
             "latent": {
-                "dim": 192,
+                # "dim": 192,
                 "latent_dim": 16,
-                "kernel_size": 3,
-                "drop_prob": 0.1,
-                "normalization": "instancenorm3d",
-                "activation": "prelu",
+                # "kernel_size": 3,
+                # "drop_prob": 0.1,
+                # "normalization": "instancenorm3d",
+                # "activation": "prelu",
             },
         }
     )
 
-    batch_size = 110
-    num_train_samples_per_datapoint = 10
+    batch_size = 70
+    num_train_samples_per_datapoint = 5
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -311,13 +311,12 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "VAE",
-        "MultiResCNN architecture",
-        "Switched to instancenorm and prelu",
+        "Monai's architecture",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v52__2025_03_30",
+            task_name="v53__2025_03_30",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

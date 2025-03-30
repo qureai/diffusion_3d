@@ -4,6 +4,7 @@ import torch
 from arjcode.model import MyLightningModule, freeze_module
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
+from monai.networks.nets.autoencoderkl import AutoencoderKL
 from munch import Munch
 from torch.nn import L1Loss
 from vision_architectures.schedulers.sigmoid import SigmoidScheduler
@@ -22,7 +23,19 @@ class VAELightning(MyLightningModule):
         self.model_config = model_config
         self.training_config = training_config
 
-        self.autoencoder = VAE(model_config, training_config.checkpointing_level)
+        # self.autoencoder = VAE(model_config, training_config.checkpointing_level)
+        self.autoencoder = AutoencoderKL(
+            spatial_dims=3,
+            in_channels=model_config.in_channels,
+            out_channels=model_config.in_channels,
+            num_res_blocks=model_config.depths,
+            channels=model_config.num_channels,
+            attention_levels=[False] * len(model_config.depths),
+            norm_num_groups=model_config.num_channels[0],
+            latent_channels=model_config.latent.latent_dim,
+            with_encoder_nonlocal_attn=False,
+            with_decoder_nonlocal_attn=False,
+        )
 
         self.reconstruction_loss = L1Loss()
         self.perceptual_loss = PerceptualLoss(
@@ -287,9 +300,13 @@ class VAELightning(MyLightningModule):
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
     def forward(self, x):
-        # x: (b, d1, z1, y1, x1)
-
-        return self.autoencoder(x)
+        o = self.autoencoder(x)
+        o = {
+            "reconstructed": o[0],
+            "z_mu": o[1],
+            "z_sigma": o[2],
+        }
+        return o
 
 
 if __name__ == "__main__":
