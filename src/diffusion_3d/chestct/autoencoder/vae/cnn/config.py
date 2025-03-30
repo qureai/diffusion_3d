@@ -12,14 +12,16 @@ def get_config(training_image_size=(64, 64, 64)):
             "num_channels": [12, 24, 48, 96, 192],
             "depths": [2, 2, 4, 4, 8],
             "drop_prob": 0.1,
-            "activation": "gelu",
+            "normalization": "instancenorm3d",
+            "activation": "prelu",
             "survival_prob": 0.95,
             "latent": {
                 "dim": 192,
                 "latent_dim": 16,
                 "kernel_size": 3,
                 "drop_prob": 0.1,
-                "activation": "gelu",
+                "normalization": "instancenorm3d",
+                "activation": "prelu",
             },
         }
     )
@@ -310,13 +312,12 @@ def get_config(training_image_size=(64, 64, 64)):
         #
         "VAE",
         "MultiResCNN architecture",
-        "Delayed KL annealing by 10 epochs",
-        "Added Stochastic Depth Dropout",
+        "Switched to instancenorm and prelu",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v51__2025_03_29",
+            task_name="v52__2025_03_30",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
