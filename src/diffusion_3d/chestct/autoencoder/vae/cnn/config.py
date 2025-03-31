@@ -269,8 +269,8 @@ def get_config(training_image_size=(64, 64, 64)):
 
     training_config = munchify(
         dict(
-            start_from_checkpoint=None,
-            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v47__2025_03_25/version_0/checkpoints/last.ckpt",
+            # start_from_checkpoint=None,
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v53__2025_03_30/version_0/checkpoints/epoch=195.ckpt",
             #
             max_epochs=200,
             lr=5e-4,
@@ -281,11 +281,11 @@ def get_config(training_image_size=(64, 64, 64)):
                 "reconstruction_loss": 1.0,
                 "perceptual_loss": 0.2,
                 "ms_ssim_loss": 0.1,
-                "kl_loss": 5e-6,
+                "kl_loss": 2e-5,
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=10,
-            kl_annealing_epochs=25,
+            kl_annealing_start_epoch=0,
+            kl_annealing_epochs=10,
             # free_bits=1.0,
             #
             checkpointing_level=0,
@@ -312,11 +312,13 @@ def get_config(training_image_size=(64, 64, 64)):
         #
         "VAE",
         "Monai's architecture",
+        "Increased kl loss 4 times",
+        "Continuing from v53",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v53__2025_03_30",
+            task_name="v54__2025_03_31__v53",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
