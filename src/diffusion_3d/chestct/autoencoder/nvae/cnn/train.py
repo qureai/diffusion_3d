@@ -7,7 +7,7 @@ from config import get_config
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from diffusion_3d.chestct.autoencoder.vae.cnn.model import VAELightning
+from diffusion_3d.chestct.autoencoder.nvae.cnn.model import NVAELightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
 
 torch.set_float32_matmul_precision("medium")
@@ -35,7 +35,7 @@ if not config.training.fast_dev_run and config.additional.log_on_clearml:
 
 # Create model and datamodule
 if config.training.start_from_checkpoint is not None:
-    model = VAELightning.load_from_checkpoint(
+    model = NVAELightning.load_from_checkpoint(
         config.training.start_from_checkpoint,
         model_config=config.model,
         training_config=config.training,
@@ -44,7 +44,7 @@ if config.training.start_from_checkpoint is not None:
     )
     print(f"Started from: {config.training.start_from_checkpoint}")
 else:
-    model = VAELightning(config.model, config.training)
+    model = NVAELightning(config.model, config.training)
 datamodule = CTRATEDataModule(config.data)
 
 

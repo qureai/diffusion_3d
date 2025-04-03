@@ -11,7 +11,7 @@ def get_config(training_image_size=(64, 64, 64)):
             "in_channels": 1,
             "num_channels": [12, 24, 48, 96],
             "depths": [2, 2, 4, 4],
-            "latent_dims": [None, 3, None, 12],
+            "latent_dims": [None, None, None, 12],
             "kernel_size": 3,
             "normalization": "groupnorm",
             "normalization_pre_args": [6],
@@ -26,8 +26,8 @@ def get_config(training_image_size=(64, 64, 64)):
         }
     )
 
-    batch_size = 70
-    num_train_samples_per_datapoint = 5
+    batch_size = 10
+    num_train_samples_per_datapoint = 10
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -269,19 +269,24 @@ def get_config(training_image_size=(64, 64, 64)):
 
     training_config = munchify(
         dict(
-            # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v53__2025_03_30/version_0/checkpoints/epoch=195.ckpt",
+            start_from_checkpoint=None,
+            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v53__2025_03_30/version_0/checkpoints/epoch=195.ckpt",
             #
-            max_epochs=200,
+            max_epochs=500,
             lr=5e-4,
             seed=42,
             check_val_every_n_epoch=1,
             #
             loss_weights={
-                "reconstruction_loss": 1.0,
-                "perceptual_loss": 0.2,
+                "reconstruction_loss": 0.4,
+                "perceptual_loss": 0.8,
                 "ms_ssim_loss": 0.1,
-                "kl_loss": 2e-5,
+                #
+                # "kl_loss_scale_0": ...,
+                # "kl_loss_scale_1": ...,
+                # "kl_loss_scale_2": ...,
+                "kl_loss_scale_3": 1e-4,
+                #
                 # "spectral_loss": 1e-6,
             },
             kl_annealing_start_epoch=0,
@@ -290,15 +295,15 @@ def get_config(training_image_size=(64, 64, 64)):
             #
             checkpointing_level=0,
             #
-            fast_dev_run=False,
-            strategy="ddp",
+            fast_dev_run=20,
+            strategy="ddp_find_unused_parameters_true",
             #
             accumulate_grad_batches=10,
             gradient_clip_val=1.0,
         )
     )
 
-    compression_factor = 2 ** len(model_config.depths)
+    compression_factor = 2 ** (len(model_config.depths) - 1)
 
     clearml_tags = [
         f"Training image size: {training_image_size}",
@@ -308,15 +313,16 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Compression: {compression_factor}",
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
-        "VAE",
-        "Monai's architecture",
-        "Increased kl loss 4 times",
-        "Continuing from v53",
+        "NVAE",
+        "Reduced L1 loss weight",
+        "Increased perceptual loss weight",
+        "Training like a simple VAE",
+        "Increased number of epochs",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v54__2025_03_31__v53",
+            task_name="v55__2025_04_03",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
@@ -331,6 +337,7 @@ def get_config(training_image_size=(64, 64, 64)):
                 for node in [
                     "qrnd10.internal.qure.ai",  # First one is master node
                     "qrnd21.l40.sr.internal.qure.ai",
+                    "qrnd8.internal.qure.ai",
                 ]
             ],
         )

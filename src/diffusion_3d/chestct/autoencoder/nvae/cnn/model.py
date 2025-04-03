@@ -4,17 +4,18 @@ import torch
 from arjcode.model import MyLightningModule, freeze_module
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
-from monai.networks.nets.autoencoderkl import AutoencoderKL
 from munch import Munch
 from torch.nn import L1Loss
-from vision_architectures.schedulers.sigmoid import SigmoidLR, SigmoidScheduler
+from vision_architectures.schedulers.lrs import ConstantLRWithWarmup
+from vision_architectures.schedulers.sigmoid import SigmoidScheduler
 
-from diffusion_3d.chestct.autoencoder.vae.cnn.nn import VAE
+from diffusion_3d.chestct.autoencoder.nvae.cnn.nn import NVAE
 
 
-class VAELightning(MyLightningModule):
+class NVAELightning(MyLightningModule):
     def __init__(self, model_config: dict, training_config: Munch):
         super().__init__(
+            find_unused_parameters=True,
             # print_small_gradient_norms=True,
             # print_large_gradient_norms=True,
         )
@@ -23,19 +24,7 @@ class VAELightning(MyLightningModule):
         self.model_config = model_config
         self.training_config = training_config
 
-        # self.autoencoder = VAE(model_config, training_config.checkpointing_level)
-        self.autoencoder = AutoencoderKL(
-            spatial_dims=3,
-            in_channels=model_config.in_channels,
-            out_channels=model_config.in_channels,
-            num_res_blocks=model_config.depths,
-            channels=model_config.num_channels,
-            attention_levels=[False] * len(model_config.depths),
-            norm_num_groups=model_config.num_channels[0],
-            latent_channels=model_config.latent.latent_dim,
-            with_encoder_nonlocal_attn=False,
-            with_decoder_nonlocal_attn=False,
-        )
+        self.autoencoder = NVAE(model_config, training_config.checkpointing_level)
 
         self.reconstruction_loss = L1Loss()
         self.perceptual_loss = PerceptualLoss(
@@ -50,9 +39,6 @@ class VAELightning(MyLightningModule):
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
         self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=4)
-
-        self.train_metrics = []
-        self.val_metrics = []
 
         self.kl_beta_scheduler = SigmoidScheduler()
 
@@ -73,15 +59,11 @@ class VAELightning(MyLightningModule):
     def calculate_ms_ssim_loss(self, reconstructed, x):
         return 1 - self.calculate_ms_ssim(reconstructed, x)
 
-    def calculate_kl_loss(self, z_mu, z_sigma):
-        z_mu_squared = z_mu.pow(2)
-        z_sigma_squared = z_sigma.pow(2)
-        kl_loss: torch.Tensor = 0.5 * (z_mu_squared + z_sigma_squared - torch.log(z_sigma_squared + 1e-8) - 1)
-
+    def calculate_kl_losses(self, kl_divergences, prior_distributions, posterior_distributions):
         # free_bits_ratio = (kl_loss < self.free_bits_per_channel).sum() / kl_loss.numel()
         # kl_loss = kl_loss.clamp(min=self.free_bits_per_channel)
 
-        # Apply beta annealing
+        # Prepare beta annealing
         if not self.kl_beta_scheduler.is_ready():
             try:
                 steps_per_epoch = (
@@ -95,29 +77,36 @@ class VAELightning(MyLightningModule):
             kl_annealing_steps = kl_annealing_epochs * steps_per_epoch
             self.kl_beta_scheduler.set_num_steps(kl_annealing_steps)
 
+        # Get beta
         kl_beta = 0.0
         if self.current_epoch >= self.training_config.kl_annealing_start_epoch:
             kl_beta = self.kl_beta_scheduler.get()
             if self.training:
                 self.kl_beta_scheduler.step()
-        kl_loss = kl_beta * kl_loss
+
+        # Scale all kl divergences
+        kl_losses = {f"kl_loss_scale_{i}": kl_beta * loss for i, loss in enumerate(kl_divergences) if loss is not None}
         # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
 
         # additional plotting
         if self.training:
-            self.log_dict(
-                {
-                    "train_kl_step/beta": kl_beta,
-                    "train_kl_step/mu": z_mu_squared.mean(),
-                    "train_kl_step/sigma": z_sigma_squared.mean(),
-                    # "train_kl_step/free_bits_ratio": free_bits_ratio,
-                },
-                sync_dist=True,
-                on_step=True,
-                on_epoch=False,
-            )
+            log_dict = kl_losses.copy()
+            log_dict["train_kl_step/beta"] = kl_beta
+            # log_dict["train_kl_step/free_bits_ratio"] = free_bits_ratio
+            for i in range(len(posterior_distributions)):
+                posterior_mu, posterior_sigma = posterior_distributions[i]
+                prior_mu, prior_sigma = prior_distributions[i]
+                if posterior_mu is not None:
+                    if prior_mu is not None:
+                        d_mu = posterior_mu - prior_mu
+                        d_sigma = posterior_sigma / prior_sigma
+                    else:
+                        d_mu, d_sigma = posterior_mu, posterior_sigma
+                    log_dict[f"train_kl_step/scale_{i}_mu"] = d_mu.mean()
+                    log_dict[f"train_kl_step/scale_{i}_sigma"] = d_sigma.mean()
+            self.log_dict(log_dict, sync_dist=True, on_step=True, on_epoch=False)
 
-        return kl_loss.mean(dim=0).sum()
+        return kl_losses
 
     def calculate_spectral_loss(self, mu, logvar, eps=1e-6, normalize_by_dim=True, spatial_average=True):
         b, dim, z, y, x = mu.shape
@@ -208,19 +197,19 @@ class VAELightning(MyLightningModule):
     def calculate_ms_ssim(self, reconstructed, x):
         return self.ms_ssim_metric(reconstructed, x).mean()
 
-    def calculate_basic_losses(self, x, reconstructed, z_mu, z_sigma):
+    def calculate_basic_losses(self, x, reconstructed, kl_divergences, prior_distributions, posterior_distributions):
         return {
             "reconstruction_loss": self.calculate_reconstruction_loss(reconstructed, x),
             "perceptual_loss": self.calculate_perceptual_loss(reconstructed, x),
             "ms_ssim_loss": self.calculate_ms_ssim_loss(reconstructed, x),
-            "kl_loss": self.calculate_kl_loss(z_mu, z_sigma),
             # "spectral_loss": self.calculate_spectral_loss(z_mu, z_sigma),
-        }
+        } | self.calculate_kl_losses(kl_divergences, prior_distributions, posterior_distributions)
 
     def calculate_metrics(self, x, reconstructed):
         metrics = {
             "psnr": self.calculate_psnr(reconstructed, x),
             "ms_ssim": self.calculate_ms_ssim(reconstructed, x),
+            "perceptual": 1 - self.calculate_perceptual_loss(reconstructed, x),
         }
         return metrics
 
@@ -230,15 +219,20 @@ class VAELightning(MyLightningModule):
         )
 
     def process_step(self, batch, prefix, batch_idx):
+        if batch_idx == 2:
+            raise
         x = batch["image"]
         # crop_offsets = batch["crop_offset"]
 
         autoencoder_output = self(x)
         reconstructed = autoencoder_output["reconstructed"]
-        z_mu = autoencoder_output["z_mu"]
-        z_sigma = autoencoder_output["z_sigma"]
+        kl_divergences = autoencoder_output["kl_divergences"]
+        prior_distributions = autoencoder_output["prior_distributions"]
+        posterior_distributions = autoencoder_output["posterior_distributions"]
 
-        all_losses = self.calculate_basic_losses(x, reconstructed, z_mu, z_sigma)
+        all_losses = self.calculate_basic_losses(
+            x, reconstructed, kl_divergences, prior_distributions, posterior_distributions
+        )
         all_metrics = self.calculate_metrics(x, reconstructed)
 
         self.calculate_autoencoder_loss(all_losses)
@@ -272,8 +266,9 @@ class VAELightning(MyLightningModule):
             "all_losses": all_losses,
             "all_metrics": all_metrics,
             "reconstructed": reconstructed,
-            "z_mu": z_mu,
-            "z_sigma": z_sigma,
+            "kl_divergences": kl_divergences,
+            "prior_distributions": prior_distributions,
+            "posterior_distributions": posterior_distributions,
         }
 
     def training_step(self, batch, batch_idx):
@@ -290,17 +285,12 @@ class VAELightning(MyLightningModule):
 
         total_steps = self.trainer.estimated_stepping_batches
         # scheduler = DecayingSineLR(optimizer, 1e-6, self.training_config.lr, total_steps // 4, 0.5)
-        scheduler = SigmoidLR(optimizer, 1e-7, self.training_config.lr, total_steps)
+        scheduler = ConstantLRWithWarmup(optimizer, total_steps // 10)
 
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
     def forward(self, x):
         o = self.autoencoder(x)
-        o = {
-            "reconstructed": o[0],
-            "z_mu": o[1],
-            "z_sigma": o[2],
-        }
         return o
 
 
@@ -312,7 +302,7 @@ if __name__ == "__main__":
     device = torch.device("cpu")
     device = torch.device("cuda:0")
 
-    autoencoder = VAELightning(config.model, config.training).to(device)
+    autoencoder = NVAELightning(config.model, config.training).to(device)
 
     sample_input = {
         "image": torch.zeros(1, 1, *config.image_size, device=device),
@@ -322,4 +312,4 @@ if __name__ == "__main__":
 
     print("Input shape: ", sample_input["image"].shape)
     print()
-    print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
+    # print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
