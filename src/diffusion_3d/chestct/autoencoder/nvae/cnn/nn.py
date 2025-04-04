@@ -110,7 +110,7 @@ class Encoder(nn.Module):
                     )
                 )
 
-            stage.append(StageBlock(channels, config, depth, checkpointing_level, False))
+            stage.append(StageBlock(channels, config, depth, False, checkpointing_level))
             self.stages.append(stage)
 
     def forward(self, x: torch.Tensor):
@@ -155,7 +155,7 @@ class LatentSpaceOps(nn.Module):
         latent_decoder = self.latent_decoders[i]
 
         if latent_encoder is None:
-            return encoding, None, None, (None, None), (None, None)
+            return previous_decoder_output, None, None, (None, None), (None, None)
 
         # Create prior
         if i == len(self.config.latent_dims) - 1:  # if deepest latent
@@ -173,7 +173,7 @@ class LatentSpaceOps(nn.Module):
         latent_decoded = latent_decoder(latent)
 
         # Combine with previous decoder output
-        output = torch.cat((latent_decoded, previous_decoder_output), dim=1)
+        output = torch.cat((previous_decoder_output, latent_decoded), dim=1)
 
         return output, latent, kl_divergence, (prior_mu, prior_sigma), (posterior_mu, posterior_sigma)
 

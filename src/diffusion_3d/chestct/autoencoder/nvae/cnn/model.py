@@ -15,7 +15,7 @@ from diffusion_3d.chestct.autoencoder.nvae.cnn.nn import NVAE
 class NVAELightning(MyLightningModule):
     def __init__(self, model_config: dict, training_config: Munch):
         super().__init__(
-            find_unused_parameters=True,
+            # find_unused_parameters=True,
             # print_small_gradient_norms=True,
             # print_large_gradient_norms=True,
         )
@@ -90,8 +90,7 @@ class NVAELightning(MyLightningModule):
 
         # additional plotting
         if self.training:
-            log_dict = kl_losses.copy()
-            log_dict["train_kl_step/beta"] = kl_beta
+            log_dict = {"train_kl_step/beta": kl_beta}
             # log_dict["train_kl_step/free_bits_ratio"] = free_bits_ratio
             for i in range(len(posterior_distributions)):
                 posterior_mu, posterior_sigma = posterior_distributions[i]
@@ -205,11 +204,11 @@ class NVAELightning(MyLightningModule):
             # "spectral_loss": self.calculate_spectral_loss(z_mu, z_sigma),
         } | self.calculate_kl_losses(kl_divergences, prior_distributions, posterior_distributions)
 
+    @torch.no_grad
     def calculate_metrics(self, x, reconstructed):
         metrics = {
             "psnr": self.calculate_psnr(reconstructed, x),
             "ms_ssim": self.calculate_ms_ssim(reconstructed, x),
-            "perceptual": 1 - self.calculate_perceptual_loss(reconstructed, x),
         }
         return metrics
 
@@ -219,8 +218,6 @@ class NVAELightning(MyLightningModule):
         )
 
     def process_step(self, batch, prefix, batch_idx):
-        if batch_idx == 2:
-            raise
         x = batch["image"]
         # crop_offsets = batch["crop_offset"]
 

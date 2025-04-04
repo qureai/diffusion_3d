@@ -5,13 +5,13 @@ from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
 
 
-def get_config(training_image_size=(64, 64, 64)):
+def get_config(training_image_size=(64, 128, 128)):
     model_config = munchify(
         {
             "in_channels": 1,
-            "num_channels": [12, 24, 48, 96],
-            "depths": [2, 2, 4, 4],
-            "latent_dims": [None, None, None, 12],
+            "num_channels": [12, 24, 48, 96, 192],
+            "depths": [2, 2, 4, 4, 4],
+            "latent_dims": [None, None, 6, 12, 24],
             "kernel_size": 3,
             "normalization": "groupnorm",
             "normalization_pre_args": [6],
@@ -26,8 +26,8 @@ def get_config(training_image_size=(64, 64, 64)):
         }
     )
 
-    batch_size = 10
-    num_train_samples_per_datapoint = 10
+    batch_size = 20
+    num_train_samples_per_datapoint = 5
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -262,7 +262,7 @@ def get_config(training_image_size=(64, 64, 64)):
             num_workers=12,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
-            train_sample_size=8_000,
+            train_sample_size=9_600,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -273,32 +273,33 @@ def get_config(training_image_size=(64, 64, 64)):
             # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v53__2025_03_30/version_0/checkpoints/epoch=195.ckpt",
             #
             max_epochs=500,
-            lr=5e-4,
+            lr=1e-4,
             seed=42,
             check_val_every_n_epoch=1,
             #
             loss_weights={
-                "reconstruction_loss": 0.4,
-                "perceptual_loss": 0.8,
+                "reconstruction_loss": 0.6,
+                "perceptual_loss": 0.6,
                 "ms_ssim_loss": 0.1,
                 #
                 # "kl_loss_scale_0": ...,
-                # "kl_loss_scale_1": ...,
-                # "kl_loss_scale_2": ...,
-                "kl_loss_scale_3": 1e-4,
+                # "kl_loss_scale_1": 3e-6,
+                "kl_loss_scale_2": 1e-5,
+                "kl_loss_scale_3": 3e-5,
+                "kl_loss_scale_4": 1e-4,
                 #
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=0,
-            kl_annealing_epochs=10,
+            kl_annealing_start_epoch=10,
+            kl_annealing_epochs=25,
             # free_bits=1.0,
             #
             checkpointing_level=0,
             #
-            fast_dev_run=20,
-            strategy="ddp_find_unused_parameters_true",
+            fast_dev_run=False,
+            strategy="ddp",
             #
-            accumulate_grad_batches=10,
+            accumulate_grad_batches=5,
             gradient_clip_val=1.0,
         )
     )
@@ -314,15 +315,13 @@ def get_config(training_image_size=(64, 64, 64)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "NVAE",
-        "Reduced L1 loss weight",
-        "Increased perceptual loss weight",
-        "Training like a simple VAE",
-        "Increased number of epochs",
+        "Latents in last three stages",
+        "Training on a larger input",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v55__2025_04_03",
+            task_name="v56__2025_04_04",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
