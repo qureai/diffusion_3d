@@ -15,7 +15,7 @@ from diffusion_3d.chestct.autoencoder.nvae.cnn.nn import NVAE
 class NVAELightning(MyLightningModule):
     def __init__(self, model_config: dict, training_config: Munch):
         super().__init__(
-            # find_unused_parameters=True,
+            # identify_unused_parameters=True,
             # print_small_gradient_norms=True,
             # print_large_gradient_norms=True,
         )
@@ -41,6 +41,18 @@ class NVAELightning(MyLightningModule):
         self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=4)
 
         self.kl_beta_scheduler = SigmoidScheduler()
+
+        # self.register_nans_infs_logging_hook()
+        # def hook(module, input, output):
+        #     string = "-" * 20 + "\n"
+        #     for name, param in module.named_parameters():
+        #         string += f"{name}: {param.min().item()}, {param.max().item()}\n"
+        #     string += f"{input[0].min().item()}, {input[0].max().item()}\n"
+        #     string += f"{output.min().item()}, {output.max().item()}\n"
+        #     string += "-" * 20 + "\n"
+        #     print(string)
+
+        # self.autoencoder.decoder.latent_space_ops.latent_decoders[2].dim_mapper.conv.register_forward_hook(hook)
 
     def calculate_reconstruction_loss(self, reconstructed, x):
         return self.reconstruction_loss(reconstructed, x)
@@ -90,30 +102,31 @@ class NVAELightning(MyLightningModule):
 
         # additional plotting
         if self.training:
-            log_dict = {"train_kl_step/beta": kl_beta}
-            # log_dict["train_kl_step/free_bits_ratio"] = free_bits_ratio
-            for i in range(len(posterior_distributions)):
-                posterior_mu, posterior_sigma = posterior_distributions[i]
-                prior_mu, prior_sigma = prior_distributions[i]
-                if posterior_mu is not None:
-                    if prior_mu is not None:
-                        d_mu = posterior_mu - prior_mu
-                        d_sigma = posterior_sigma / prior_sigma
-                    else:
-                        d_mu, d_sigma = posterior_mu, posterior_sigma
-                    log_dict[f"train_kl_step/scale_{i}_mu"] = d_mu.mean()
-                    log_dict[f"train_kl_step/scale_{i}_sigma"] = d_sigma.mean()
-            self.log_dict(log_dict, sync_dist=True, on_step=True, on_epoch=False)
+            with torch.no_grad():
+                log_dict = {"train_kl_step/beta": kl_beta}
+                # log_dict["train_kl_step/free_bits_ratio"] = free_bits_ratio
+                for i in range(len(posterior_distributions)):
+                    posterior_mu, posterior_sigma = posterior_distributions[i]
+                    prior_mu, prior_sigma = prior_distributions[i]
+                    if posterior_mu is not None:
+                        log_dict[f"train_kl_step/posterior_mu{i}"] = posterior_mu.mean()
+                        log_dict[f"train_kl_step/posterior_sigma{i}"] = posterior_sigma.mean()
+                        if prior_mu is not None:
+                            d_mu = posterior_mu - prior_mu
+                            d_sigma = posterior_sigma / prior_sigma
+                            log_dict[f"train_kl_step/d_mu{i}"] = d_mu.mean()
+                            log_dict[f"train_kl_step/d_sigma{i}"] = d_sigma.mean()
+                self.log_dict(log_dict, sync_dist=True, on_step=True, on_epoch=False)
 
         return kl_losses
 
-    def calculate_spectral_loss(self, mu, logvar, eps=1e-6, normalize_by_dim=True, spatial_average=True):
+    def calculate_spectral_loss(self, mu, log_var, eps=1e-6, normalize_by_dim=True, spatial_average=True):
         b, dim, z, y, x = mu.shape
         num_voxels = z * y * x
 
         # Flatten spatial dimensions
         mu_flat = mu.reshape(b, dim, num_voxels)  # (b, dim, num_voxels)
-        logvar_flat = logvar.reshape(b, dim, num_voxels)  # (b, dim, num_voxels)
+        log_var_flat = log_var.reshape(b, dim, num_voxels)  # (b, dim, num_voxels)
 
         # Compute empirical covariance matrix from mu across all samples and spatial locations
         # We'll compute this separately for each batch and average to reduce batch dependency
@@ -133,9 +146,9 @@ class NVAELightning(MyLightningModule):
         # Average covariance matrices across batches
         cov_mu = torch.stack(batch_cov_matrices).mean(dim=0)  # (dim, dim)
 
-        # Properly incorporate the variance from logvar
+        # Properly incorporate the variance from log_var
         # First average variances per batch, then across batches
-        var_flat = torch.exp(logvar_flat)  # (b, dim, num_voxels)
+        var_flat = torch.exp(log_var_flat)  # (b, dim, num_voxels)
 
         # Average variance across spatial dimensions for each latent dimension and batch
         batch_var_diags = var_flat.mean(dim=2)  # (b, dim)
@@ -235,29 +248,30 @@ class NVAELightning(MyLightningModule):
         self.calculate_autoencoder_loss(all_losses)
 
         # Log
-        step_log = {}
-        epoch_log = {}
+        with torch.no_grad():
+            step_log = {}
+            epoch_log = {}
 
-        for key, value in all_losses.items():
-            scaled_value = self.training_config.loss_weights.get(key, 1.0) * value
-            if prefix == "train":
-                step_log[f"train_step/{key}"] = float(value)
-                step_log[f"train_step_scaled/{key}"] = float(scaled_value)
-            epoch_log[f"{prefix}_epoch_loss/{key}"] = float(value)
-            epoch_log[f"{prefix}_epoch_loss_scaled/{key}"] = float(scaled_value)
+            for key, value in all_losses.items():
+                scaled_value = self.training_config.loss_weights.get(key, 1.0) * value
+                if prefix == "train":
+                    step_log[f"train_step/{key}"] = float(value)
+                    step_log[f"train_step_scaled/{key}"] = float(scaled_value)
+                epoch_log[f"{prefix}_epoch_loss/{key}"] = float(value)
+                epoch_log[f"{prefix}_epoch_loss_scaled/{key}"] = float(scaled_value)
 
-        for key, value in all_metrics.items():
-            epoch_log[f"{prefix}_epoch_metrics/{key}"] = float(value)
+            for key, value in all_metrics.items():
+                epoch_log[f"{prefix}_epoch_metrics/{key}"] = float(value)
 
-        try:
-            self.log_dict(step_log, sync_dist=True, on_step=True, on_epoch=False)
-        except:
-            print(f"Error in logging steps {step_log}")
+            try:
+                self.log_dict(step_log, sync_dist=True, on_step=True, on_epoch=False)
+            except:
+                print(f"Error in logging steps {step_log}")
 
-        try:
-            self.log_dict(epoch_log, sync_dist=True, on_step=False, on_epoch=True)
-        except:
-            print(f"Error in logging epochs {epoch_log}")
+            try:
+                self.log_dict(epoch_log, sync_dist=True, on_step=False, on_epoch=True)
+            except:
+                print(f"Error in logging epochs {epoch_log}")
 
         return {
             "all_losses": all_losses,

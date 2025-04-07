@@ -19,14 +19,14 @@ class ResBlock(nn.Module):
             checkpointing_level,
             in_channels=in_channels,
             out_channels=out_channels,
-            sequence="NACD",
+            sequence="NAC",
         )
         self.conv2 = CNNBlock3D(
             model_config,
             checkpointing_level,
             in_channels=out_channels,
             out_channels=out_channels,
-            sequence="NACD",
+            sequence="NAC",
         )
         self.conv_res = CNNBlock3D(
             model_config,
@@ -159,12 +159,12 @@ class LatentSpaceOps(nn.Module):
 
         # Create prior
         if i == len(self.config.latent_dims) - 1:  # if deepest latent
-            prior_mu, prior_sigma, prior_logvar = None, None, None
+            prior_mu, prior_sigma, prior_log_var = None, None, None
         else:
-            prior_mu, prior_sigma, prior_logvar = prior_estimator(previous_decoder_output, return_logvar=True)
+            prior_mu, prior_sigma, prior_log_var = prior_estimator(previous_decoder_output, return_log_var=True)
 
         # Create posterior
-        posterior_mu, posterior_sigma = latent_encoder(encoding, prior_mu, prior_logvar)
+        posterior_mu, posterior_sigma = latent_encoder(encoding, prior_mu, prior_log_var)
 
         # Create latent
         latent, kl_divergence = self.latent_space(posterior_mu, posterior_sigma, prior_mu, prior_sigma)
@@ -300,12 +300,11 @@ if __name__ == "__main__":
     import psutil
     from arjcode.visualize import describe_model
     from config import get_config
-    from monai.networks.nets.autoencoderkl import AutoencoderKL
 
     config = get_config()
 
     device = torch.device("cpu")
-    device = torch.device("cuda:0")
+    # device = torch.device("cuda:0")
 
     autoencoder = NVAE(config.model, 0).to(device)
     print("Encoder:")
