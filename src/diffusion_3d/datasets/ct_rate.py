@@ -37,7 +37,7 @@ class CTRATEDataModule(L.LightningDataModule):
         elif run_type == "valid":
             batch_size = self.config.val_batch_size
         elif run_type == "test":
-            batch_size = 1
+            batch_size = self.config.test_batch_size
 
         dataloader = DataLoader(
             dataset,

@@ -167,7 +167,15 @@ class LatentSpaceOps(nn.Module):
         posterior_mu, posterior_sigma = latent_encoder(encoding, prior_mu, prior_log_var)
 
         # Create latent
-        latent, kl_divergence = self.latent_space(posterior_mu, posterior_sigma, prior_mu, prior_sigma)
+        latent, kl_divergence = self.latent_space(
+            posterior_mu, posterior_sigma, prior_mu, prior_sigma, kl_divergence_reduction=None
+        )
+
+        # if i == 3 or i == 4:
+        #     print(f"a{i}")
+        #     latent = torch.randn_like(latent)
+        #     if prior_mu is not None:
+        #         latent = prior_mu + prior_sigma * latent
 
         # Decode latent
         latent_decoded = latent_decoder(latent)
@@ -304,7 +312,7 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    # device = torch.device("cuda:0")
+    device = torch.device("cuda:0")
 
     autoencoder = NVAE(config.model, 0).to(device)
     print("Encoder:")
@@ -348,7 +356,7 @@ if __name__ == "__main__":
     print("Outputs:")
     print("Reconstructed:", sample_output["reconstructed"].shape)
     print("Latents:", replace_with_shapes(sample_output["latents"]))
-    print("kl_loss:", sample_output["kl_divergences"])
+    print("kl_loss:", replace_with_shapes(sample_output["kl_divergences"]))
     print("Prior distributions:", replace_with_shapes(sample_output["prior_distributions"]))
     print("Posterior distributions:", replace_with_shapes(sample_output["posterior_distributions"]))
     print()

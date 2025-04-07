@@ -11,7 +11,7 @@ def get_config(training_image_size=(64, 128, 128)):
             "in_channels": 1,
             "num_channels": [12, 24, 48, 96, 192],
             "depths": [2, 2, 4, 4, 4],
-            "latent_dims": [None, None, 6, 12, 24],
+            "latent_dims": [None, 3, 6, 12, 24],
             "kernel_size": 3,
             "normalization": "groupnorm",
             "normalization_pre_args": [6],
@@ -224,44 +224,36 @@ def get_config(training_image_size=(64, 128, 128)):
                     clipping_transform,
                 ],
             },
-            # test_augmentations={
-            #     "_target_": "monai.transforms.Compose",
-            #     "transforms": [
-            #         {
-            #             "_target_": "vision_architectures.transforms.croppad.CropForegroundWithCropTrackingd",
-            #             "keys": transformsd_keys,
-            #             "source_key": transformsd_keys[0],
-            #             "allow_smaller": True,
-            #         },
-            #         {
-            #             "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
-            #             "keys": transformsd_keys,
-            #             "a_min": -1000,
-            #             "a_max": 2000,
-            #             "b_min": -1.0,
-            #             "b_max": 1.0,
-            #             "clip": True,
-            #         },
-            #         {
-            #             "_target_": "monai.transforms.SpatialPadd",
-            #             "keys": transformsd_keys,
-            #             "spatial_size": minimum_input_size,
-            #             "mode": "constant",
-            #             "value": -1,
-            #         },
-            #         {
-            #             "_target_": "monai.transforms.DivisiblePadd",
-            #             "keys": transformsd_keys,
-            #             "k": latent_patch_size,
-            #             "mode": "constant",
-            #             "value": -1,
-            #         },
-            #     ],
-            # },
-            #
+            test_augmentations={
+                "_target_": "monai.transforms.Compose",
+                "transforms": [
+                    {
+                        "_target_": "vision_architectures.transforms.croppad.CropForegroundWithCropTrackingd",
+                        "keys": transformsd_keys,
+                        "source_key": transformsd_keys[0],
+                        "allow_smaller": True,
+                    },
+                    {
+                        "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
+                        "keys": transformsd_keys,
+                        "a_min": -1000,
+                        "a_max": 2000,
+                        "b_min": -1.0,
+                        "b_max": 1.0,
+                        "clip": True,
+                    },
+                    {
+                        "_target_": "monai.transforms.CenterSpatialCropd",
+                        "keys": transformsd_keys,
+                        "roi_size": training_image_size,
+                    },
+                    clipping_transform,
+                ],
+            },
             num_workers=12,
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
+            test_batch_size=batch_size,
             train_sample_size=9_600,
             sample_balance_cols=["Source", "BodyPart"],
         )
@@ -283,20 +275,24 @@ def get_config(training_image_size=(64, 128, 128)):
                 "ms_ssim_loss": 0.1,
                 #
                 # "kl_loss_scale_0": ...,
-                # "kl_loss_scale_1": 3e-6,
-                "kl_loss_scale_2": 1e-5,
+                "kl_loss_scale_1": 3e-4,
+                "kl_loss_scale_2": 1e-4,
                 "kl_loss_scale_3": 3e-5,
-                "kl_loss_scale_4": 1e-4,
+                "kl_loss_scale_4": 1e-5,
                 #
                 # "spectral_loss": 1e-6,
             },
             kl_annealing_start_epoch=10,
             kl_annealing_epochs=25,
-            # free_bits=1.0,
+            free_bits_per_dim={
+                "scale_2": 0.1,
+                "scale_3": 0.03,
+                "scale_4": 0.01,
+            },
             #
             checkpointing_level=0,
             #
-            fast_dev_run=False,
+            fast_dev_run=20,
             strategy="ddp",
             #
             accumulate_grad_batches=5,
