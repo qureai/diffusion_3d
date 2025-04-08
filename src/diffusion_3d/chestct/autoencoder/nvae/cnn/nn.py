@@ -171,7 +171,7 @@ class LatentSpaceOps(nn.Module):
             posterior_mu, posterior_sigma, prior_mu, prior_sigma, kl_divergence_reduction=None
         )
 
-        # if i == 3 or i == 4:
+        # if i == 4:
         #     print(f"a{i}")
         #     latent = torch.randn_like(latent)
         #     if prior_mu is not None:

@@ -99,18 +99,20 @@ class NVAELightning(MyLightningModule):
         for i, loss in enumerate(kl_divergences):
             if loss is not None:
                 # Implement free bits
-                free_bits = self.free_bits_per_dim[i]
+                free_bits = self.free_bits_per_dim[f"scale_{i}"]
+                free_bits_ratios[f"free_bits_ratio_scale_{i}"] = (loss < free_bits).sum() / loss.numel()
                 loss: torch.Tensor = loss.clamp(min=free_bits).mean(dim=0).sum()
 
                 # Scale the KL divergence by the beta value
                 kl_losses[f"kl_loss_scale_{i}"] = kl_beta * loss
-                free_bits_ratios[f"free_bits_ratio_scale_{i}"] = (loss < free_bits).sum() / loss.numel()
         # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
 
         # additional plotting
         if self.training:
             with torch.no_grad():
-                log_dict = {"train_kl_step/beta": kl_beta} | free_bits_ratios
+                log_dict = {"train_kl_step/beta": kl_beta} | {
+                    f"train_kl_step/{k}": v for k, v in free_bits_ratios.items()
+                }
                 for i in range(len(posterior_distributions)):
                     posterior_mu, posterior_sigma = posterior_distributions[i]
                     prior_mu, prior_sigma = prior_distributions[i]
@@ -226,25 +228,22 @@ class NVAELightning(MyLightningModule):
             # "spectral_loss": self.calculate_spectral_loss(z_mu, z_sigma),
         } | self.calculate_kl_losses(kl_divergences, prior_distributions, posterior_distributions)
 
-    def calculate_aurs(self, prior_distributions, posterior_distributions):
+    def calculate_aurs(self, kl_divergences):
         aurs = {}
-        for i, (prior, posterior) in enumerate(zip(prior_distributions, posterior_distributions)):
-            if posterior[0] is None:
+        for i, kl_divergence in enumerate(kl_divergences):
+            if kl_divergence is None:
                 continue
 
-            kl_per_dim = self.autoencoder.decoder.latent_space_ops.latent_space.kl_divergence(
-                posterior[0], posterior[1], prior[0], prior[1], reduction=None
-            )
-            kl_per_channel = kl_per_dim.mean(dim=(0, 2, 3, 4))
-            aurs[f"aur_scale_{i}"] = (kl_per_channel > 0.01).float().mean() / kl_per_channel.numel()
+            kl_per_channel = kl_divergence.mean(dim=(0, 2, 3, 4))
+            aurs[f"aur_scale_{i}"] = (kl_per_channel > 0.01).float().mean()
         return aurs
 
     @torch.no_grad
-    def calculate_metrics(self, x, reconstructed, prior_distributions, posterior_distributions):
+    def calculate_metrics(self, x, reconstructed, kl_divergences):
         metrics = {
             "psnr": self.calculate_psnr(reconstructed, x),
             "ms_ssim": self.calculate_ms_ssim(reconstructed, x),
-        } | self.calculate_aurs(prior_distributions, posterior_distributions)
+        } | self.calculate_aurs(kl_divergences)
         return metrics
 
     def calculate_autoencoder_loss(self, all_losses):
@@ -265,7 +264,7 @@ class NVAELightning(MyLightningModule):
         all_losses = self.calculate_basic_losses(
             x, reconstructed, kl_divergences, prior_distributions, posterior_distributions
         )
-        all_metrics = self.calculate_metrics(x, reconstructed, prior_distributions, posterior_distributions)
+        all_metrics = self.calculate_metrics(x, reconstructed, kl_divergences)
 
         self.calculate_autoencoder_loss(all_losses)
 

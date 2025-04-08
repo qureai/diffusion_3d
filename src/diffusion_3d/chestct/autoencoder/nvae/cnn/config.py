@@ -11,7 +11,7 @@ def get_config(training_image_size=(64, 128, 128)):
             "in_channels": 1,
             "num_channels": [12, 24, 48, 96, 192],
             "depths": [2, 2, 4, 4, 4],
-            "latent_dims": [None, 3, 6, 12, 24],
+            "latent_dims": [None, None, 6, 12, 24],
             "kernel_size": 3,
             "normalization": "groupnorm",
             "normalization_pre_args": [6],
@@ -275,7 +275,7 @@ def get_config(training_image_size=(64, 128, 128)):
                 "ms_ssim_loss": 0.1,
                 #
                 # "kl_loss_scale_0": ...,
-                "kl_loss_scale_1": 3e-4,
+                # "kl_loss_scale_1": 3e-4,
                 "kl_loss_scale_2": 1e-4,
                 "kl_loss_scale_3": 3e-5,
                 "kl_loss_scale_4": 1e-5,
@@ -283,7 +283,7 @@ def get_config(training_image_size=(64, 128, 128)):
                 # "spectral_loss": 1e-6,
             },
             kl_annealing_start_epoch=10,
-            kl_annealing_epochs=25,
+            kl_annealing_epochs=50,
             free_bits_per_dim={
                 "scale_2": 0.1,
                 "scale_3": 0.03,
@@ -292,7 +292,7 @@ def get_config(training_image_size=(64, 128, 128)):
             #
             checkpointing_level=0,
             #
-            fast_dev_run=20,
+            fast_dev_run=False,
             strategy="ddp",
             #
             accumulate_grad_batches=5,
@@ -312,12 +312,13 @@ def get_config(training_image_size=(64, 128, 128)):
         #
         "NVAE",
         "Latents in last three stages",
-        "Training on a larger input",
+        "Corrected KL loss weights",
+        "Added free bits",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v56__2025_04_04",
+            task_name="v57__2025_04_07",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
