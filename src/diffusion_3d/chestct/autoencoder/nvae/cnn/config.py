@@ -261,8 +261,8 @@ def get_config(training_image_size=(64, 128, 128)):
 
     training_config = munchify(
         dict(
-            start_from_checkpoint=None,
-            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v53__2025_03_30/version_0/checkpoints/epoch=195.ckpt",
+            # start_from_checkpoint=None,
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v58__2025_04_08/version_0/checkpoints/last.ckpt",
             #
             max_epochs=500,
             lr=1e-4,
@@ -276,19 +276,46 @@ def get_config(training_image_size=(64, 128, 128)):
                 #
                 # "kl_loss_scale_0": ...,
                 # "kl_loss_scale_1": 3e-4,
-                "kl_loss_scale_2": 1e-4,
-                "kl_loss_scale_3": 3e-5,
-                "kl_loss_scale_4": 1e-5,
+                "kl_loss_scale_2": 3e-6,
+                "kl_loss_scale_3": 3e-6,
+                "kl_loss_scale_4": 3e-6,
                 #
                 # "spectral_loss": 1e-6,
             },
-            kl_annealing_start_epoch=10,
-            kl_annealing_epochs=50,
-            free_bits_per_dim={
-                "scale_2": 0.1,
-                "scale_3": 0.03,
-                "scale_4": 0.01,
+            # kl_annealing={
+            #     "scale_2": {
+            #         "start_epoch": 0,
+            #         "epochs": 15,
+            #     },
+            #     "scale_3": {
+            #         "start_epoch": 10,
+            #         "epochs": 25,
+            #     },
+            #     "scale_4": {
+            #         "start_epoch": 20,
+            #         "epochs": 40,
+            #     },
+            # },
+            kl_annealing={
+                "scale_2": {
+                    "start_epoch": 0,
+                    "epochs": 10,
+                },
+                "scale_3": {
+                    "start_epoch": 5,
+                    "epochs": 10,
+                },
+                "scale_4": {
+                    "start_epoch": 15,
+                    "epochs": 10,
+                },
             },
+            free_nats_per_dim={
+                "scale_2": 0.05,
+                "scale_3": 0.1,
+                "scale_4": 0.15,
+            },
+            aur_threshold_per_dim=0.05,
             #
             checkpointing_level=0,
             #
@@ -312,13 +339,15 @@ def get_config(training_image_size=(64, 128, 128)):
         #
         "NVAE",
         "Latents in last three stages",
-        "Corrected KL loss weights",
-        "Added free bits",
+        "Updated free nats values",
+        "Reduced KL weight per dim",
+        "Corrected AUR per dim threshold",
+        "Separated beta schedules for each scale",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v57__2025_04_07",
+            task_name="v59__2025_04_09__v58",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

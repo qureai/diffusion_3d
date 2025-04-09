@@ -8,6 +8,7 @@ from munch import Munch
 from torch.nn import L1Loss
 from vision_architectures.schedulers.lrs import ConstantLRWithWarmup
 from vision_architectures.schedulers.sigmoid import SigmoidScheduler
+from vision_architectures.utils.clamping import floor_softplus_clamp
 
 from diffusion_3d.chestct.autoencoder.nvae.cnn.nn import NVAE
 
@@ -32,7 +33,7 @@ class NVAELightning(MyLightningModule):
         )
         freeze_module(self.perceptual_loss)
 
-        self.free_bits_per_dim = training_config.free_bits_per_dim
+        self.free_nats_per_dim = training_config.free_nats_per_dim
 
         self.train_losses = []
         self.val_losses = []
@@ -40,7 +41,7 @@ class NVAELightning(MyLightningModule):
         self.psnr_metric = PSNRMetric(max_val=2.0)
         self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=4)
 
-        self.kl_beta_scheduler = SigmoidScheduler()
+        self.kl_beta_schedulers = {key: SigmoidScheduler() for key in training_config.kl_annealing.keys()}
 
         # self.register_nans_infs_logging_hook()
         # def hook(module, input, output):
@@ -72,61 +73,77 @@ class NVAELightning(MyLightningModule):
         return 1 - self.calculate_ms_ssim(reconstructed, x)
 
     def calculate_kl_losses(self, kl_divergences, prior_distributions, posterior_distributions):
-        # Prepare beta annealing
-        if not self.kl_beta_scheduler.is_ready():
-            try:
-                steps_per_epoch = (
-                    self.trainer.estimated_stepping_batches
-                    * self.trainer.accumulate_grad_batches
-                    // self.trainer.max_epochs
-                )
-            except RuntimeError:
-                steps_per_epoch = 100
-            kl_annealing_epochs = self.training_config.kl_annealing_epochs
-            kl_annealing_steps = kl_annealing_epochs * steps_per_epoch
-            self.kl_beta_scheduler.set_num_steps(kl_annealing_steps)
+        # Prepare beta annealing and get betas
+        kl_betas = {}
+        for key in self.kl_beta_schedulers:
+            kl_beta_scheduler = self.kl_beta_schedulers[key]
+            if not kl_beta_scheduler.is_ready():
+                try:
+                    steps_per_epoch = (
+                        self.trainer.estimated_stepping_batches
+                        * self.trainer.accumulate_grad_batches
+                        // self.trainer.max_epochs
+                    )
+                except RuntimeError:
+                    steps_per_epoch = 100
+                kl_annealing_epochs = self.training_config.kl_annealing[key]["epochs"]
+                kl_annealing_steps = kl_annealing_epochs * steps_per_epoch
+                self.kl_beta_schedulers[key].set_num_steps(kl_annealing_steps)
 
-        # Get beta
-        kl_beta = 0.0
-        if self.current_epoch >= self.training_config.kl_annealing_start_epoch:
-            kl_beta = self.kl_beta_scheduler.get()
-            if self.training:
-                self.kl_beta_scheduler.step()
+            if self.current_epoch >= self.training_config.kl_annealing[key]["start_epoch"]:
+                kl_betas[key] = kl_beta_scheduler.get()
+                if self.training:
+                    kl_beta_scheduler.step()
+            else:
+                kl_betas[key] = 0.0
+
+        # free nats clamping
+        free_nats_ratios = {}
+        clamped_kl_divergences = []
+        for i, kl_divergence in enumerate(kl_divergences):
+            if kl_divergence is not None:
+                free_nats = self.free_nats_per_dim[f"scale_{i}"]
+                free_nats_ratios[f"free_nats_ratio_scale_{i}"] = (
+                    kl_divergence < free_nats
+                ).sum() / kl_divergence.numel()
+                kl_divergence: torch.Tensor = floor_softplus_clamp(kl_divergence, free_nats).mean(dim=0).sum()
+                clamped_kl_divergences.append(kl_divergence)
+            else:
+                clamped_kl_divergences.append(None)
 
         # Scale all kl divergences
         kl_losses = {}
-        free_bits_ratios = {}
-        for i, loss in enumerate(kl_divergences):
-            if loss is not None:
-                # Implement free bits
-                free_bits = self.free_bits_per_dim[f"scale_{i}"]
-                free_bits_ratios[f"free_bits_ratio_scale_{i}"] = (loss < free_bits).sum() / loss.numel()
-                loss: torch.Tensor = loss.clamp(min=free_bits).mean(dim=0).sum()
+        for i, kl_divergence in enumerate(clamped_kl_divergences):
+            if kl_divergence is not None:
+                kl_beta = kl_betas[f"scale_{i}"]
+                kl_losses[f"kl_loss_scale_{i}"] = kl_beta * kl_divergence
 
-                # Scale the KL divergence by the beta value
-                kl_losses[f"kl_loss_scale_{i}"] = kl_beta * loss
-        # all_losses["spectral_loss"] = kl_beta * all_losses["spectral_loss"]
-
-        # additional plotting
+        # logging
         if self.training:
             with torch.no_grad():
-                log_dict = {"train_kl_step/beta": kl_beta} | {
-                    f"train_kl_step/{k}": v for k, v in free_bits_ratios.items()
-                }
+                log_dict = (
+                    {f"train_kl_step/beta_{key}": kl_beta for key, kl_beta in kl_betas.items()}
+                    | {f"train_kl_step/{k}": v for k, v in free_nats_ratios.items()}
+                    | {
+                        f"train_kl_step/kl_per_dim_scale_{i}": kl_divergence.mean()
+                        for i, kl_divergence in enumerate(kl_divergences)
+                        if kl_divergence is not None
+                    }
+                )
                 for i in range(len(posterior_distributions)):
                     posterior_mu, posterior_sigma = posterior_distributions[i]
                     prior_mu, prior_sigma = prior_distributions[i]
                     if posterior_mu is not None:
-                        log_dict[f"train_kl_step/posterior_mu{i}"] = posterior_mu.mean()
-                        log_dict[f"train_kl_step/posterior_sigma{i}"] = posterior_sigma.mean()
+                        log_dict[f"train_dist_step/posterior_mu{i}"] = posterior_mu.mean()
+                        log_dict[f"train_dist_step/posterior_sigma{i}"] = posterior_sigma.mean()
                         if prior_mu is not None:
-                            log_dict[f"train_kl_step/prior_mu{i}"] = prior_mu.mean()
-                            log_dict[f"train_kl_step/prior_sigma{i}"] = prior_sigma.mean()
+                            log_dict[f"train_dist_step/prior_mu{i}"] = prior_mu.mean()
+                            log_dict[f"train_dist_step/prior_sigma{i}"] = prior_sigma.mean()
 
                             d_mu = posterior_mu - prior_mu
                             d_sigma = posterior_sigma / prior_sigma
-                            log_dict[f"train_kl_step/d_mu{i}"] = d_mu.mean()
-                            log_dict[f"train_kl_step/d_sigma{i}"] = d_sigma.mean()
+                            log_dict[f"train_dist_step/d_mu{i}"] = d_mu.mean()
+                            log_dict[f"train_dist_step/d_sigma{i}"] = d_sigma.mean()
                 self.log_dict(log_dict, sync_dist=True, on_step=True, on_epoch=False)
 
         return kl_losses
@@ -233,9 +250,7 @@ class NVAELightning(MyLightningModule):
         for i, kl_divergence in enumerate(kl_divergences):
             if kl_divergence is None:
                 continue
-
-            kl_per_channel = kl_divergence.mean(dim=(0, 2, 3, 4))
-            aurs[f"aur_scale_{i}"] = (kl_per_channel > 0.01).float().mean()
+            aurs[f"aur_scale_{i}"] = (kl_divergence > self.training_config.aur_threshold_per_dim).float().mean()
         return aurs
 
     @torch.no_grad
@@ -251,7 +266,7 @@ class NVAELightning(MyLightningModule):
             self.training_config.loss_weights[key] * all_losses[key] for key in all_losses
         )
 
-    def process_step(self, batch, prefix, batch_idx):
+    def process_step(self, batch, prefix, batch_idx=-1):
         x = batch["image"]
         # crop_offsets = batch["crop_offset"]
 
@@ -301,6 +316,8 @@ class NVAELightning(MyLightningModule):
             "kl_divergences": kl_divergences,
             "prior_distributions": prior_distributions,
             "posterior_distributions": posterior_distributions,
+            "step_log": step_log,
+            "epoch_log": epoch_log,
         }
 
     def training_step(self, batch, batch_idx):
@@ -344,6 +361,4 @@ if __name__ == "__main__":
 
     print("Input shape: ", sample_input["image"].shape)
     print()
-    # print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
-    # print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
     # print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
