@@ -39,7 +39,7 @@ class NVAELightning(MyLightningModule):
         self.val_losses = []
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
-        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=4)
+        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=2)
 
         self.kl_beta_schedulers = {key: SigmoidScheduler() for key in training_config.kl_annealing.keys()}
 
@@ -54,6 +54,13 @@ class NVAELightning(MyLightningModule):
         #     print(string)
 
         # self.autoencoder.decoder.latent_space_ops.latent_decoders[2].dim_mapper.conv.register_forward_hook(hook)
+
+        self.freeze_scales(training_config.freeze_scales)
+
+    def freeze_scales(self, scales):
+        for scale in scales:
+            freeze_module(self.autoencoder.encoder.stages[scale])
+            freeze_module(self.autoencoder.decoder.stages[scale])
 
     def calculate_reconstruction_loss(self, reconstructed, x):
         return self.reconstruction_loss(reconstructed, x)

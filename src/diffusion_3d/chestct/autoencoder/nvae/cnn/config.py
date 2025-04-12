@@ -5,29 +5,29 @@ from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
 
 
-def get_config(training_image_size=(64, 128, 128)):
+def get_config(training_image_size=(32, 32, 32)):
     model_config = munchify(
         {
             "in_channels": 1,
-            "num_channels": [12, 24, 48, 96, 192],
-            "depths": [2, 2, 4, 4, 4],
-            "latent_dims": [None, None, 6, 12, 24],
+            "num_channels": [4, 8, 16],
+            "depths": [8, 8, 8],
+            "latent_dims": [None, None, 1],
             "kernel_size": 3,
             "normalization": "groupnorm",
-            "normalization_pre_args": [6],
+            "normalization_pre_args": [4],
             "activation": "silu",
             "survival_prob": 1.0,
             "latent": {
                 "kernel_size": 3,
                 "normalization": "groupnorm",
-                "normalization_pre_args": [3],
+                "normalization_pre_args_list": [None, None, 1],
                 "activation": "silu",
             },
         }
     )
 
-    batch_size = 20
-    num_train_samples_per_datapoint = 5
+    batch_size = 600
+    num_train_samples_per_datapoint = 150
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -261,8 +261,8 @@ def get_config(training_image_size=(64, 128, 128)):
 
     training_config = munchify(
         dict(
-            # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v60__2025_04_09__v59/version_0/checkpoints/last.ckpt",
+            start_from_checkpoint=None,
+            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v60__2025_04_09__v59/version_0/checkpoints/last.ckpt",
             #
             max_epochs=500,
             lr=1e-4,
@@ -274,38 +274,37 @@ def get_config(training_image_size=(64, 128, 128)):
                 "perceptual_loss": 0.6,
                 "ms_ssim_loss": 0.1,
                 #
-                # "kl_loss_scale_0": ...,
-                # "kl_loss_scale_1": 3e-4,
-                "kl_loss_scale_2": 3e-7,
-                "kl_loss_scale_3": 3e-7,
-                "kl_loss_scale_4": 3e-7,
+                "kl_loss_scale_2": 1e-4,
+                # "kl_loss_scale_3": 3e-7,
+                # "kl_loss_scale_4": 3e-7,
                 #
                 # "spectral_loss": 1e-6,
             },
             kl_annealing={
                 "scale_2": {
                     "start_epoch": 0,
-                    "epochs": 50,
+                    "epochs": 80,
                 },
-                "scale_3": {
-                    "start_epoch": 40,
-                    "epochs": 50,
-                },
-                "scale_4": {
-                    "start_epoch": 80,
-                    "epochs": 50,
-                },
+                # "scale_3": {
+                #     "start_epoch": 40,
+                #     "epochs": 50,
+                # },
+                # "scale_4": {
+                #     "start_epoch": 80,
+                #     "epochs": 50,
+                # },
             },
             free_nats_per_dim={
                 "scale_2": 0.1,
-                "scale_3": 0.15,
-                "scale_4": 0.2,
+                # "scale_3": 0.15,
+                # "scale_4": 0.2,
             },
             aur_threshold_per_dim=0.1,
             #
             checkpointing_level=0,
+            freeze_scales=[0, 1],
             #
-            fast_dev_run=20,
+            fast_dev_run=False,
             strategy="ddp",
             #
             accumulate_grad_batches=5,
@@ -324,13 +323,17 @@ def get_config(training_image_size=(64, 128, 128)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "NVAE",
-        "Latents in last three stages",
-        "KL scheduling starts later and for longer",
+        "Training 4x compression",
+        "ms_ssim kernel = 2",
+        "Freezing scales 0,1",
+        "Latent groupnorm size configurable for each scale",
+        "Reduced KL weight",
+        "Reduced num latents",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v61__2025_04_10__v60",
+            task_name="v62__2025_04_11",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

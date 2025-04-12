@@ -140,8 +140,10 @@ class LatentSpaceOps(nn.Module):
             dim = num_channels[i]
 
             latent_config = config.latent.copy()
+            latent_config.normalization_pre_args = [latent_config.normalization_pre_args_list[i]]
             latent_config.dim = dim
             latent_config.latent_dim = latent_dim
+            print(latent_config)
             self.latent_encoders[i] = LatentEncoder(latent_config, checkpointing_level)
             self.latent_decoders[i] = LatentDecoder(latent_config, checkpointing_level)
             if i != len(latent_dims) - 1:  # if not deepest latent
@@ -171,7 +173,7 @@ class LatentSpaceOps(nn.Module):
             posterior_mu, posterior_sigma, prior_mu, prior_sigma, kl_divergence_reduction=None
         )
 
-        # if i == 2:
+        # if i == 4:
         #     print(f"a{i}")
         #     latent = torch.randn_like(latent)
         #     if prior_mu is not None:
@@ -312,7 +314,7 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    device = torch.device("cuda:0")
+    # device = torch.device("cuda:0")
 
     autoencoder = NVAE(config.model, 0).to(device)
     print("Encoder:")
