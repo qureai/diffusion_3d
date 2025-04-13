@@ -261,8 +261,8 @@ def get_config(training_image_size=(32, 32, 32)):
 
     training_config = munchify(
         dict(
-            start_from_checkpoint=None,
-            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v60__2025_04_09__v59/version_0/checkpoints/last.ckpt",
+            # start_from_checkpoint=None,
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v63__2025_04_12/version_0/checkpoints/last.ckpt",
             #
             max_epochs=500,
             lr=1e-4,
@@ -274,7 +274,7 @@ def get_config(training_image_size=(32, 32, 32)):
                 "perceptual_loss": 0.6,
                 "ms_ssim_loss": 0.1,
                 #
-                "kl_loss_scale_2": 1e-4,
+                "kl_loss_scale_2": 3e-5,
                 # "kl_loss_scale_3": 3e-7,
                 # "kl_loss_scale_4": 3e-7,
                 #
@@ -283,7 +283,7 @@ def get_config(training_image_size=(32, 32, 32)):
             kl_annealing={
                 "scale_2": {
                     "start_epoch": 0,
-                    "epochs": 80,
+                    "epochs": 100,
                 },
                 # "scale_3": {
                 #     "start_epoch": 40,
@@ -295,14 +295,14 @@ def get_config(training_image_size=(32, 32, 32)):
                 # },
             },
             free_nats_per_dim={
-                "scale_2": 0.1,
+                "scale_2": 0.05,
                 # "scale_3": 0.15,
                 # "scale_4": 0.2,
             },
-            aur_threshold_per_dim=0.1,
+            aur_threshold_per_dim=0.05,
             #
             checkpointing_level=0,
-            freeze_scales=[0, 1],
+            freeze_scales=[],  # [0, 1],
             #
             fast_dev_run=False,
             strategy="ddp",
@@ -323,17 +323,15 @@ def get_config(training_image_size=(32, 32, 32)):
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
         "NVAE",
-        "Training 4x compression",
+        "Training 4x compression per dim",
         "ms_ssim kernel = 2",
-        "Freezing scales 0,1",
-        "Latent groupnorm size configurable for each scale",
-        "Reduced KL weight",
-        "Reduced num latents",
+        # "Freezing scales 0,1",
+        "Resumed from last checkpoint i.e. kl resets",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v62__2025_04_11",
+            task_name="v64__2025_04_13__v63",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

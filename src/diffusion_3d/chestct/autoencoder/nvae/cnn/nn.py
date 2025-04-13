@@ -143,7 +143,6 @@ class LatentSpaceOps(nn.Module):
             latent_config.normalization_pre_args = [latent_config.normalization_pre_args_list[i]]
             latent_config.dim = dim
             latent_config.latent_dim = latent_dim
-            print(latent_config)
             self.latent_encoders[i] = LatentEncoder(latent_config, checkpointing_level)
             self.latent_decoders[i] = LatentDecoder(latent_config, checkpointing_level)
             if i != len(latent_dims) - 1:  # if not deepest latent
