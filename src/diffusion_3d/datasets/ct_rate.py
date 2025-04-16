@@ -44,7 +44,7 @@ class CTRATEDataModule(L.LightningDataModule):
             batch_size=batch_size,
             shuffle=False,
             num_workers=self.config.num_workers,
-            pin_memory=True,
+            pin_memory=True if run_type == "train" else False,
             drop_last=True,
             sampler=sampler,
             persistent_workers=True,

@@ -1,13 +1,13 @@
 import math
 
 import torch
-from arjcode.model import MyLightningModule, freeze_module
+from arjcode.model import MyLightningModule, freeze_module, freeze_modules
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
 from munch import Munch
 from torch.nn import L1Loss
+from vision_architectures.schedulers.cyclic import SineScheduler
 from vision_architectures.schedulers.lrs import ConstantLRWithWarmup
-from vision_architectures.schedulers.sigmoid import SigmoidScheduler
 from vision_architectures.utils.clamping import floor_softplus_clamp
 
 from diffusion_3d.chestct.autoencoder.nvae.cnn.nn import NVAE
@@ -39,9 +39,9 @@ class NVAELightning(MyLightningModule):
         self.val_losses = []
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
-        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=2)
+        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=7)
 
-        self.kl_beta_schedulers = {key: SigmoidScheduler() for key in training_config.kl_annealing.keys()}
+        self.kl_beta_schedulers = {key: SineScheduler(0, 1, 0) for key in training_config.kl_annealing.keys()}
 
         # self.register_nans_infs_logging_hook()
         # def hook(module, input, output):
@@ -59,8 +59,13 @@ class NVAELightning(MyLightningModule):
 
     def freeze_scales(self, scales):
         for scale in scales:
-            freeze_module(self.autoencoder.encoder.stages[scale])
-            freeze_module(self.autoencoder.decoder.stages[scale])
+            freeze_modules(
+                [
+                    self.autoencoder.encoder.stages[scale],
+                    self.autoencoder.decoder.stages[scale],
+                ]
+            )
+            print(f"Freezing scale: {scale}")
 
     def calculate_reconstruction_loss(self, reconstructed, x):
         return self.reconstruction_loss(reconstructed, x)
@@ -93,9 +98,9 @@ class NVAELightning(MyLightningModule):
                     )
                 except RuntimeError:
                     steps_per_epoch = 100
-                kl_annealing_epochs = self.training_config.kl_annealing[key]["epochs"]
-                kl_annealing_steps = kl_annealing_epochs * steps_per_epoch
-                self.kl_beta_schedulers[key].set_num_steps(kl_annealing_steps)
+                kl_annealing_wavelength = self.training_config.kl_annealing[key]["wavelength"]
+                kl_annealing_steps = kl_annealing_wavelength * steps_per_epoch
+                self.kl_beta_schedulers[key].set_wavelength(kl_annealing_steps)
 
             if self.current_epoch >= self.training_config.kl_annealing[key]["start_epoch"]:
                 kl_betas[key] = kl_beta_scheduler.get()
@@ -356,7 +361,7 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    device = torch.device("cuda:0")
+    # device = torch.device("cuda:0")
 
     autoencoder = NVAELightning(config.model, config.training).to(device)
 
@@ -369,3 +374,4 @@ if __name__ == "__main__":
     print("Input shape: ", sample_input["image"].shape)
     print()
     # print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
+    print(sample_output["all_losses"], sample_output["all_metrics"])

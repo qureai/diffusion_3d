@@ -307,6 +307,7 @@ if __name__ == "__main__":
     from time import perf_counter
 
     import psutil
+    from arjcode.model import freeze_modules
     from arjcode.visualize import describe_model
     from config import get_config
 
@@ -322,6 +323,11 @@ if __name__ == "__main__":
     describe_model(autoencoder.decoder)
 
     autoencoder.train()
+
+    # Freezing some scales
+    for scale in config.training.freeze_scales:
+        freeze_modules([autoencoder.encoder.stages[scale], autoencoder.decoder.stages[scale]])
+        print(f"Scale {scale} frozen")
 
     # Track memory before execution
     torch.cuda.reset_peak_memory_stats()

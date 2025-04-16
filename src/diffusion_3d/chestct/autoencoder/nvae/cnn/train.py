@@ -35,13 +35,19 @@ if not config.training.fast_dev_run and config.additional.log_on_clearml:
 
 # Create model and datamodule
 if config.training.start_from_checkpoint is not None:
-    model = NVAELightning.load_from_checkpoint(
-        config.training.start_from_checkpoint,
-        model_config=config.model,
-        training_config=config.training,
-        # strict=False,
-        map_location="cpu",
-    )
+    # model = NVAELightning.load_from_checkpoint(
+    #     config.training.start_from_checkpoint,
+    #     model_config=config.model,
+    #     training_config=config.training,
+    #     map_location="cpu",
+    #     strict=False,
+    # )
+
+    model = NVAELightning(config.model, config.training)
+    state_dict = torch.load(config.training.start_from_checkpoint, map_location="cpu", weights_only=False)["state_dict"]
+    state_dict.pop("autoencoder.decoder.hidden_decoding", None)
+    model.load_state_dict(state_dict, strict=False)
+
     print(f"Started from: {config.training.start_from_checkpoint}")
 else:
     model = NVAELightning(config.model, config.training)
@@ -126,8 +132,8 @@ trainer = L.Trainer(
     num_sanity_val_steps=0,
     check_val_every_n_epoch=config.training.check_val_every_n_epoch,
     fast_dev_run=config.training.fast_dev_run,
-    log_every_n_steps=1,
     accumulate_grad_batches=config.training.accumulate_grad_batches if not config.training.fast_dev_run else 1,
+    log_every_n_steps=config.training.log_every_n_steps,
     strategy=config.training.strategy,
     gradient_clip_val=config.training.gradient_clip_val,
     devices=devices,

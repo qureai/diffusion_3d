@@ -5,13 +5,13 @@ from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
 
 
-def get_config(training_image_size=(32, 32, 32)):
+def get_config(training_image_size=(128, 128, 128)):
     model_config = munchify(
         {
             "in_channels": 1,
-            "num_channels": [4, 8, 16],
-            "depths": [8, 8, 8],
-            "latent_dims": [None, None, 1],
+            "num_channels": [8, 16, 32, 64, 128],
+            "depths": [4, 4, 4, 4, 4],
+            "latent_dims": [None, None, 4, None, 16],
             "kernel_size": 3,
             "normalization": "groupnorm",
             "normalization_pre_args": [4],
@@ -20,14 +20,22 @@ def get_config(training_image_size=(32, 32, 32)):
             "latent": {
                 "kernel_size": 3,
                 "normalization": "groupnorm",
-                "normalization_pre_args_list": [None, None, 1],
+                "normalization_pre_args_list": [None, None, 2, None, 4],
                 "activation": "silu",
             },
         }
     )
 
-    batch_size = 600
-    num_train_samples_per_datapoint = 150
+    # 64x compression, 64 latent, 512 input, 512 intermediate, effective 4096x compression
+    # 32x compression, 32 latent, 256 input, 256 intermediate, effective 1024x compression
+    # 16x compression, 16 latent, 128 input, 128 intermediate, effective 256x compression
+    # 8x compression, 8 latent, 64 input, 64 intermediate, effective 64x compression
+    # 4x compression, 4 latent, 32 input, 32 intermediate, effective 16x compression
+    # 2x compression, 2 latent, 16 input, 16 intermediate, effective 4x compression
+    # 1x compression, No latent, Not trained separately, 8 intermediate
+
+    batch_size = 9
+    num_train_samples_per_datapoint = 3
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -221,6 +229,14 @@ def get_config(training_image_size=(32, 32, 32)):
                         "roi_size": training_image_size,
                         "num_samples": num_val_samples_per_datapoint,
                     },
+                    {  # In case image gets cropped to smaller size than required size
+                        "_target_": "vision_architectures.transforms.spatial.ResizedWithCropTrackingd",
+                        "keys": transformsd_keys,
+                        "original_shape_key": "Shape",
+                        "spatial_size": training_image_size,
+                        "mode": "trilinear",
+                        "anti_aliasing": True,
+                    },
                     clipping_transform,
                 ],
             },
@@ -247,6 +263,14 @@ def get_config(training_image_size=(32, 32, 32)):
                         "keys": transformsd_keys,
                         "roi_size": training_image_size,
                     },
+                    {  # In case image gets cropped to smaller size than required size
+                        "_target_": "vision_architectures.transforms.spatial.ResizedWithCropTrackingd",
+                        "keys": transformsd_keys,
+                        "original_shape_key": "Shape",
+                        "spatial_size": training_image_size,
+                        "mode": "trilinear",
+                        "anti_aliasing": True,
+                    },
                     clipping_transform,
                 ],
             },
@@ -254,7 +278,7 @@ def get_config(training_image_size=(32, 32, 32)):
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
             test_batch_size=batch_size,
-            train_sample_size=9_600,
+            train_sample_size=10_800,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -262,7 +286,7 @@ def get_config(training_image_size=(32, 32, 32)):
     training_config = munchify(
         dict(
             # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v63__2025_04_12/version_0/checkpoints/last.ckpt",
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v65__2025_04_13/version_0/checkpoints/last.ckpt",
             #
             max_epochs=500,
             lr=1e-4,
@@ -270,45 +294,40 @@ def get_config(training_image_size=(32, 32, 32)):
             check_val_every_n_epoch=1,
             #
             loss_weights={
-                "reconstruction_loss": 0.6,
-                "perceptual_loss": 0.6,
+                "reconstruction_loss": 0.9,
+                "perceptual_loss": 0.3,
                 "ms_ssim_loss": 0.1,
                 #
-                "kl_loss_scale_2": 3e-5,
-                # "kl_loss_scale_3": 3e-7,
-                # "kl_loss_scale_4": 3e-7,
+                "kl_loss_scale_2": 1e-6,
+                "kl_loss_scale_4": 1e-6,
                 #
                 # "spectral_loss": 1e-6,
             },
             kl_annealing={
                 "scale_2": {
                     "start_epoch": 0,
-                    "epochs": 100,
+                    "wavelength": 30,
                 },
-                # "scale_3": {
-                #     "start_epoch": 40,
-                #     "epochs": 50,
-                # },
-                # "scale_4": {
-                #     "start_epoch": 80,
-                #     "epochs": 50,
-                # },
+                "scale_4": {
+                    "start_epoch": 0,
+                    "wavelength": 20,
+                },
             },
             free_nats_per_dim={
                 "scale_2": 0.05,
-                # "scale_3": 0.15,
-                # "scale_4": 0.2,
+                "scale_4": 0.05,
             },
             aur_threshold_per_dim=0.05,
             #
             checkpointing_level=0,
-            freeze_scales=[],  # [0, 1],
+            freeze_scales=[0, 1, 2],
             #
             fast_dev_run=False,
             strategy="ddp",
             #
             accumulate_grad_batches=5,
-            gradient_clip_val=1.0,
+            log_every_n_steps=1,
+            gradient_clip_val=5.0,
         )
     )
 
@@ -321,17 +340,18 @@ def get_config(training_image_size=(32, 32, 32)):
         f"Train batch size: {data_config.train_batch_size}",
         f"Compression: {compression_factor}",
         f"Checkpointing level: {training_config.checkpointing_level}",
+        f"Frozen scales: {training_config.freeze_scales}",
         #
         "NVAE",
-        "Training 4x compression per dim",
-        "ms_ssim kernel = 2",
-        # "Freezing scales 0,1",
-        "Resumed from last checkpoint i.e. kl resets",
+        "Training 16x compression per dim",
+        "ms_ssim kernel = 7",
+        "Increased kl weight proportionately",
+        "Increased grad batches",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v64__2025_04_13__v63",
+            task_name="v66__2025_04_16__4xv65",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
