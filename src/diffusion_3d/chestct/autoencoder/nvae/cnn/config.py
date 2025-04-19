@@ -286,7 +286,7 @@ def get_config(training_image_size=(128, 128, 128)):
     training_config = munchify(
         dict(
             # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v65__2025_04_13/version_0/checkpoints/last.ckpt",
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v66__2025_04_16__4xv65/version_0/checkpoints/last.ckpt",
             #
             max_epochs=500,
             lr=1e-4,
@@ -297,11 +297,13 @@ def get_config(training_image_size=(128, 128, 128)):
                 "reconstruction_loss": 0.9,
                 "perceptual_loss": 0.3,
                 "ms_ssim_loss": 0.1,
+                "gen_fool_disc_loss": 0.6,
                 #
                 "kl_loss_scale_2": 1e-6,
                 "kl_loss_scale_4": 1e-6,
                 #
-                # "spectral_loss": 1e-6,
+                "disc_catch_gen_loss": 0.5,
+                "disc_identify_real_loss": 0.5,
             },
             kl_annealing={
                 "scale_2": {
@@ -319,11 +321,13 @@ def get_config(training_image_size=(128, 128, 128)):
             },
             aur_threshold_per_dim=0.05,
             #
+            discriminator_annealing_epochs=30,
+            #
             checkpointing_level=0,
             freeze_scales=[0, 1, 2],
             #
-            fast_dev_run=False,
-            strategy="ddp",
+            fast_dev_run=20,
+            strategy="ddp_find_unused_parameters_true",
             #
             accumulate_grad_batches=5,
             log_every_n_steps=1,
@@ -345,13 +349,13 @@ def get_config(training_image_size=(128, 128, 128)):
         "NVAE",
         "Training 16x compression per dim",
         "ms_ssim kernel = 7",
-        "Increased kl weight proportionately",
-        "Increased grad batches",
+        "Added discriminator",
+        "Autoencoder training only after 50 epochs",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v66__2025_04_16__4xv65",
+            task_name="v67__2025_04_19__4xv65__v66",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

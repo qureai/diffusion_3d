@@ -2,12 +2,15 @@ import math
 
 import torch
 from arjcode.model import MyLightningModule, freeze_module, freeze_modules
+from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
+from monai.networks.nets import PatchDiscriminator
 from munch import Munch
 from torch.nn import L1Loss
 from vision_architectures.schedulers.cyclic import SineScheduler
 from vision_architectures.schedulers.lrs import ConstantLRWithWarmup
+from vision_architectures.schedulers.sigmoid import SigmoidScheduler
 from vision_architectures.utils.clamping import floor_softplus_clamp
 
 from diffusion_3d.chestct.autoencoder.nvae.cnn.nn import NVAE
@@ -27,33 +30,29 @@ class NVAELightning(MyLightningModule):
 
         self.autoencoder = NVAE(model_config, training_config.checkpointing_level)
 
+        self.discriminator = PatchDiscriminator(
+            spatial_dims=3,
+            channels=32,
+            in_channels=model_config.in_channels,
+            norm="INSTANCE",
+        )
+        self.automatic_optimization = False
+
         self.reconstruction_loss = L1Loss()
         self.perceptual_loss = PerceptualLoss(
             spatial_dims=3, network_type="squeeze", is_fake_3d=True, fake_3d_ratio=0.2
         )
         freeze_module(self.perceptual_loss)
 
-        self.free_nats_per_dim = training_config.free_nats_per_dim
+        self.adv_loss = PatchAdversarialLoss()
 
-        self.train_losses = []
-        self.val_losses = []
+        self.free_nats_per_dim = training_config.free_nats_per_dim
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
         self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=7)
 
         self.kl_beta_schedulers = {key: SineScheduler(0, 1, 0) for key in training_config.kl_annealing.keys()}
-
-        # self.register_nans_infs_logging_hook()
-        # def hook(module, input, output):
-        #     string = "-" * 20 + "\n"
-        #     for name, param in module.named_parameters():
-        #         string += f"{name}: {param.min().item()}, {param.max().item()}\n"
-        #     string += f"{input[0].min().item()}, {input[0].max().item()}\n"
-        #     string += f"{output.min().item()}, {output.max().item()}\n"
-        #     string += "-" * 20 + "\n"
-        #     print(string)
-
-        # self.autoencoder.decoder.latent_space_ops.latent_decoders[2].dim_mapper.conv.register_forward_hook(hook)
+        self.discriminator_scheduler = SigmoidScheduler()
 
         self.freeze_scales(training_config.freeze_scales)
 
@@ -72,14 +71,6 @@ class NVAELightning(MyLightningModule):
 
     def calculate_perceptual_loss(self, reconstructed, x):
         return self.perceptual_loss(reconstructed.float(), x.float()).clamp(min=0.0)
-
-    def calculate_tv_loss(self, reconstructed):
-        # Calculate Total Variation loss across all three dimensions
-        diff_i = torch.abs(reconstructed[:, :, :, :, :-1] - reconstructed[:, :, :, :, 1:])
-        diff_j = torch.abs(reconstructed[:, :, :, :-1, :] - reconstructed[:, :, :, 1:, :])
-        diff_k = torch.abs(reconstructed[:, :, :-1, :, :] - reconstructed[:, :, 1:, :, :])
-
-        return torch.mean(diff_i) + torch.mean(diff_j) + torch.mean(diff_k)
 
     def calculate_ms_ssim_loss(self, reconstructed, x):
         return 1 - self.calculate_ms_ssim(reconstructed, x)
@@ -160,102 +151,68 @@ class NVAELightning(MyLightningModule):
 
         return kl_losses
 
-    def calculate_spectral_loss(self, mu, log_var, eps=1e-6, normalize_by_dim=True, spatial_average=True):
-        b, dim, z, y, x = mu.shape
-        num_voxels = z * y * x
-
-        # Flatten spatial dimensions
-        mu_flat = mu.reshape(b, dim, num_voxels)  # (b, dim, num_voxels)
-        log_var_flat = log_var.reshape(b, dim, num_voxels)  # (b, dim, num_voxels)
-
-        # Compute empirical covariance matrix from mu across all samples and spatial locations
-        # We'll compute this separately for each batch and average to reduce batch dependency
-        batch_cov_matrices = []
-        for i in range(b):
-            # Treat each spatial location as an independent sample (dim, num_voxels)
-            mu_batch = mu_flat[i].permute(1, 0)  # (num_voxels, dim)
-
-            # Center the data for this batch
-            mu_centered = mu_batch - mu_batch.mean(dim=0, keepdim=True)
-
-            # Scale by 1/(N-1) for unbiased estimation when sample size is large
-            cov_factor = 1.0 / max(num_voxels - 1, 1)
-            batch_cov = cov_factor * mu_centered.T @ mu_centered  # (dim, dim)
-            batch_cov_matrices.append(batch_cov)
-
-        # Average covariance matrices across batches
-        cov_mu = torch.stack(batch_cov_matrices).mean(dim=0)  # (dim, dim)
-
-        # Properly incorporate the variance from log_var
-        # First average variances per batch, then across batches
-        var_flat = torch.exp(log_var_flat)  # (b, dim, num_voxels)
-
-        # Average variance across spatial dimensions for each latent dimension and batch
-        batch_var_diags = var_flat.mean(dim=2)  # (b, dim)
-
-        # Then average across batches
-        var_diag = batch_var_diags.mean(dim=0)  # (dim,)
-
-        # Add diagonal variance to covariance matrix
-        cov_matrix = cov_mu + torch.diag(var_diag)  # (dim, dim)
-
-        # Add small epsilon to diagonal for numerical stability
-        # This is more robust than simple addition since it scales with eigenvalue magnitudes
-        diag_eps = eps * (1.0 + torch.diag(cov_matrix).abs())
-        cov_matrix = cov_matrix + torch.diag(diag_eps)
-
-        # Compute eigenvalues with robust approach
-        try:
-            eigvals = torch.linalg.eigvalsh(cov_matrix)  # (dim,)
-            # Apply safe clamping with a scaled minimum value
-            min_eig = eps * (1.0 + eigvals.abs().max().item())
-            eigvals = torch.clamp(eigvals, min=min_eig)
-        except RuntimeError:
-            # Fallback for numerical instability: add larger epsilon and retry
-            cov_matrix = cov_matrix + torch.eye(dim, device=cov_matrix.device) * (eps * 10.0)
-            eigvals = torch.linalg.eigvalsh(cov_matrix)
-            min_eig = eps * 10.0 * (1.0 + eigvals.abs().max().item())
-            eigvals = torch.clamp(eigvals, min=min_eig)
-
-        # Spectral KL loss: 0.5 * sum(λᵢ - 1 - log(λᵢ))
-        per_dim_loss = 0.5 * (eigvals - 1.0 - torch.log(eigvals + eps))
-
-        # Apply normalization based on latent dimension to ensure consistent scaling
-        if normalize_by_dim:
-            spectral_loss = per_dim_loss.sum() / dim
-        else:
-            spectral_loss = per_dim_loss.sum()
-
-        # Further scale by spatial dimensions if requested
-        # This makes the loss invariant to the number of spatial points
-        if spatial_average:
-            # Apply a scaling factor that's inversely proportional to num_voxels
-            # This keeps the loss magnitude consistent regardless of spatial resolution
-            # We use sqrt because covariance already has a quadratic relationship with sample count
-            spectral_loss = spectral_loss * (100.0 / max(math.sqrt(num_voxels), 1.0))
-
-        # Participation Ratio: (sum(λᵢ))² / sum(λᵢ²)
-        # Measures effective dimensionality of the latent representation
-        participation_ratio = (eigvals.sum() ** 2) / (eigvals.pow(2).sum() + eps)
-        scaled_participation_ratio = participation_ratio / dim
-        self.log("train_kl_step/participation_ratio", participation_ratio, sync_dist=True)
-        self.log("train_kl_step/scaled_participation_ratio", scaled_participation_ratio, sync_dist=True)
-
-        return spectral_loss
-
     def calculate_psnr(self, reconstructed, x):
         return self.psnr_metric(reconstructed, x).mean()
 
     def calculate_ms_ssim(self, reconstructed, x):
         return self.ms_ssim_metric(reconstructed, x).mean()
 
-    def calculate_basic_losses(self, x, reconstructed, kl_divergences, prior_distributions, posterior_distributions):
+    def calculate_adv_losses(self, reconstructed, x):
+        if not self.discriminator_scheduler.is_ready():
+            try:
+                steps_per_epoch = (
+                    self.trainer.estimated_stepping_batches
+                    * self.trainer.accumulate_grad_batches
+                    // self.trainer.max_epochs
+                )
+            except RuntimeError:
+                steps_per_epoch = 100
+            discriminator_annealing_epochs = self.training_config.discriminator_annealing_epochs
+            discriminator_annealing_steps = discriminator_annealing_epochs * steps_per_epoch
+            self.discriminator_scheduler.set_num_steps(discriminator_annealing_steps)
+
+        discriminator_beta = self.discriminator_scheduler.get()
+        if self.training:
+            self.discriminator_scheduler.step()
+
+        gen_fool_disc_loss = self.adv_loss(
+            self.discriminator(reconstructed)[-1],
+            target_is_real=True,
+            for_discriminator=False,
+        )
+        disc_catch_gen_loss = discriminator_beta * self.adv_loss(
+            self.discriminator(reconstructed.detach())[-1],
+            target_is_real=False,
+            for_discriminator=True,
+        )
+        disc_identify_real_loss = discriminator_beta * self.adv_loss(
+            self.discriminator(x)[-1],
+            target_is_real=True,
+            for_discriminator=True,
+        )
+
+        # logging
+        if self.training:
+            with torch.no_grad():
+                self.log(f"train_disc_step/beta", discriminator_beta, sync_dist=True, on_step=True, on_epoch=False)
+
         return {
-            "reconstruction_loss": self.calculate_reconstruction_loss(reconstructed, x),
-            "perceptual_loss": self.calculate_perceptual_loss(reconstructed, x),
-            "ms_ssim_loss": self.calculate_ms_ssim_loss(reconstructed, x),
-            # "spectral_loss": self.calculate_spectral_loss(z_mu, z_sigma),
-        } | self.calculate_kl_losses(kl_divergences, prior_distributions, posterior_distributions)
+            "gen_fool_disc_loss": gen_fool_disc_loss,
+            "disc_catch_gen_loss": disc_catch_gen_loss,
+            "disc_identify_real_loss": disc_identify_real_loss,
+        }
+
+    def calculate_basic_losses(self, x, reconstructed, kl_divergences, prior_distributions, posterior_distributions):
+        return (
+            {
+                "reconstruction_loss": self.calculate_reconstruction_loss(reconstructed, x),
+                "perceptual_loss": self.calculate_perceptual_loss(reconstructed, x),
+                "ms_ssim_loss": self.calculate_ms_ssim_loss(reconstructed, x),
+                # "spectral_loss": self.calculate_spectral_loss(z_mu, z_sigma),
+            }
+            | self.calculate_kl_losses(kl_divergences, prior_distributions, posterior_distributions)
+            | self.calculate_adv_losses(reconstructed, x)
+        )
 
     def calculate_aurs(self, kl_divergences):
         aurs = {}
@@ -265,7 +222,7 @@ class NVAELightning(MyLightningModule):
             aurs[f"aur_scale_{i}"] = (kl_divergence > self.training_config.aur_threshold_per_dim).float().mean()
         return aurs
 
-    @torch.no_grad
+    @torch.no_grad()
     def calculate_metrics(self, x, reconstructed, kl_divergences):
         metrics = {
             "psnr": self.calculate_psnr(reconstructed, x),
@@ -275,7 +232,16 @@ class NVAELightning(MyLightningModule):
 
     def calculate_autoencoder_loss(self, all_losses):
         all_losses["autoencoder_loss"] = sum(
-            self.training_config.loss_weights[key] * all_losses[key] for key in all_losses
+            self.training_config.loss_weights[key] * all_losses[key]
+            for key in all_losses
+            if not key.startswith("disc_")
+        )
+        if self.current_epoch <= 50:
+            all_losses["autoencoder_loss"] *= 0.0  # Don't train for the first 50 epochs
+
+    def calculate_discriminator_loss(self, all_losses):
+        all_losses["discriminator_loss"] = sum(
+            self.training_config.loss_weights[key] * all_losses[key] for key in all_losses if key.startswith("disc_")
         )
 
     def process_step(self, batch, prefix, batch_idx=-1):
@@ -294,6 +260,7 @@ class NVAELightning(MyLightningModule):
         all_metrics = self.calculate_metrics(x, reconstructed, kl_divergences)
 
         self.calculate_autoencoder_loss(all_losses)
+        self.calculate_discriminator_loss(all_losses)
 
         # Log
         with torch.no_grad():
@@ -333,7 +300,35 @@ class NVAELightning(MyLightningModule):
         }
 
     def training_step(self, batch, batch_idx):
-        return self.process_step(batch, "train", batch_idx)["all_losses"]["autoencoder_loss"]
+        return_value = self.process_step(batch, "train", batch_idx)
+        all_losses = return_value["all_losses"]
+
+        # Manual optimization
+        optimizer_main, optimizer_disc = self.optimizers()
+        scheduler_main, scheduler_disc = self.lr_schedulers()
+
+        # Accumulate gradients
+        self.manual_backward(all_losses["autoencoder_loss"])
+        self.manual_backward(all_losses["discriminator_loss"])
+
+        # Update weights if it's time
+        if self.trainer.global_step % self.training_config.accumulate_grad_batches == 0:
+            # VAE
+            self.clip_gradients(
+                optimizer_main, gradient_clip_val=self.training_config.gradient_clip_val, gradient_clip_algorithm="norm"
+            )
+            optimizer_main.step()
+            optimizer_main.zero_grad(set_to_none=True)
+
+            # Discriminator
+            self.clip_gradients(
+                optimizer_disc, gradient_clip_val=self.training_config.gradient_clip_val, gradient_clip_algorithm="norm"
+            )
+            optimizer_disc.step()
+            optimizer_disc.zero_grad(set_to_none=True)
+
+            scheduler_main.step()
+            scheduler_disc.step()
 
     def validation_step(self, batch, batch_idx):
         return self.process_step(batch, "val", batch_idx)
@@ -342,13 +337,24 @@ class NVAELightning(MyLightningModule):
         self.print_log()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.parameters()), lr=self.training_config.lr)
+        all_params = set(filter(lambda p: p.requires_grad, self.parameters()))
+        disc_params = set(filter(lambda p: p.requires_grad, self.discriminator.parameters()))
+        main_params = all_params - disc_params
+
+        optimizer_main = torch.optim.Adam(main_params, lr=self.training_config.lr)
+        optimizer_disc = torch.optim.Adam(disc_params, lr=2 * self.training_config.lr, betas=(0.5, 0.999))
 
         total_steps = self.trainer.estimated_stepping_batches
-        # scheduler = DecayingSineLR(optimizer, 1e-6, self.training_config.lr, total_steps // 4, 0.5)
-        scheduler = ConstantLRWithWarmup(optimizer, total_steps // 10)
+        scheduler_main = ConstantLRWithWarmup(optimizer_main, total_steps // 10)
+        scheduler_disc = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_disc, T_max=total_steps, eta_min=1e-6)
 
-        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
+        return [
+            optimizer_main,
+            optimizer_disc,
+        ], [
+            {"scheduler": scheduler_main, "interval": "step"},
+            {"scheduler": scheduler_disc, "interval": "step"},
+        ]
 
     def forward(self, x):
         o = self.autoencoder(x)
