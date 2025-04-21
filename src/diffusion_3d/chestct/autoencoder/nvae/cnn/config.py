@@ -34,20 +34,17 @@ def get_config(training_image_size=(128, 128, 128)):
     # 2x compression, 2 latent, 16 input, 16 intermediate, effective 4x compression
     # 1x compression, No latent, Not trained separately, 8 intermediate
 
-    batch_size = 9
-    num_train_samples_per_datapoint = 3
+    batch_size = 14
+    num_train_samples_per_datapoint = 7
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
 
     clipping_transform = {
-        "_target_": "monai.transforms.ScaleIntensityRanged",
+        "_target_": "vision_architectures.transforms.clipping.Clipd",
         "keys": transformsd_keys,
-        "a_min": -1.0,
-        "a_max": 1.0,
-        "b_min": -1.0,
-        "b_max": 1.0,
-        "clip": True,
+        "min_value": -1.0,
+        "max_value": 1.0,
     }
 
     def compose_with_clipping_tranform(transforms):
@@ -159,21 +156,21 @@ def get_config(training_image_size=(128, 128, 128)):
                                         {
                                             "_target_": "monai.transforms.RandGaussianNoised",
                                             "keys": transformsd_keys,
-                                            "prob": 0.75,
+                                            "prob": 0.5,
                                         }
                                     ),
                                     compose_with_clipping_tranform(
                                         {
                                             "_target_": "monai.transforms.RandGaussianSmoothd",
                                             "keys": transformsd_keys,
-                                            "prob": 0.75,
+                                            "prob": 0.5,
                                         }
                                     ),
                                     compose_with_clipping_tranform(
                                         {
                                             "_target_": "monai.transforms.RandGaussianSharpend",
                                             "keys": transformsd_keys,
-                                            "prob": 0.75,
+                                            "prob": 0.5,
                                         }
                                     ),
                                 ],
@@ -278,7 +275,7 @@ def get_config(training_image_size=(128, 128, 128)):
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
             test_batch_size=batch_size,
-            train_sample_size=10_800,
+            train_sample_size=7_200,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -286,7 +283,7 @@ def get_config(training_image_size=(128, 128, 128)):
     training_config = munchify(
         dict(
             # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v66__2025_04_16__4xv65/version_0/checkpoints/last.ckpt",
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v65__2025_04_13/version_0/checkpoints/last.ckpt",
             #
             max_epochs=500,
             lr=1e-4,
@@ -297,7 +294,7 @@ def get_config(training_image_size=(128, 128, 128)):
                 "reconstruction_loss": 0.9,
                 "perceptual_loss": 0.3,
                 "ms_ssim_loss": 0.1,
-                "gen_fool_disc_loss": 0.6,
+                "gen_fool_disc_loss": 0.4,
                 #
                 "kl_loss_scale_2": 1e-6,
                 "kl_loss_scale_4": 1e-6,
@@ -321,12 +318,12 @@ def get_config(training_image_size=(128, 128, 128)):
             },
             aur_threshold_per_dim=0.05,
             #
-            discriminator_annealing_epochs=30,
+            discriminator_annealing_epochs=50,
             #
             checkpointing_level=0,
             freeze_scales=[0, 1, 2],
             #
-            fast_dev_run=20,
+            fast_dev_run=False,
             strategy="ddp_find_unused_parameters_true",
             #
             accumulate_grad_batches=5,
@@ -349,13 +346,12 @@ def get_config(training_image_size=(128, 128, 128)):
         "NVAE",
         "Training 16x compression per dim",
         "ms_ssim kernel = 7",
-        "Added discriminator",
-        "Autoencoder training only after 50 epochs",
+        "Retraining second scale with discriminator",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v67__2025_04_19__4xv65__v66",
+            task_name="v68__2025_04_19__4xv65",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

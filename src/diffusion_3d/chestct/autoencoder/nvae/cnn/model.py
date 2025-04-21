@@ -57,6 +57,9 @@ class NVAELightning(MyLightningModule):
         self.freeze_scales(training_config.freeze_scales)
 
     def freeze_scales(self, scales):
+        if 0 in scales:
+            freeze_module(self.autoencoder.encoder_mapping)
+            freeze_module(self.autoencoder.decoder_mapping)
         for scale in scales:
             freeze_modules(
                 [
@@ -82,11 +85,7 @@ class NVAELightning(MyLightningModule):
             kl_beta_scheduler = self.kl_beta_schedulers[key]
             if not kl_beta_scheduler.is_ready():
                 try:
-                    steps_per_epoch = (
-                        self.trainer.estimated_stepping_batches
-                        * self.trainer.accumulate_grad_batches
-                        // self.trainer.max_epochs
-                    )
+                    steps_per_epoch = self.get_steps_per_epoch()
                 except RuntimeError:
                     steps_per_epoch = 100
                 kl_annealing_wavelength = self.training_config.kl_annealing[key]["wavelength"]
@@ -160,41 +159,47 @@ class NVAELightning(MyLightningModule):
     def calculate_adv_losses(self, reconstructed, x):
         if not self.discriminator_scheduler.is_ready():
             try:
-                steps_per_epoch = (
-                    self.trainer.estimated_stepping_batches
-                    * self.trainer.accumulate_grad_batches
-                    // self.trainer.max_epochs
-                )
+                steps_per_epoch = self.get_steps_per_epoch()
             except RuntimeError:
                 steps_per_epoch = 100
             discriminator_annealing_epochs = self.training_config.discriminator_annealing_epochs
             discriminator_annealing_steps = discriminator_annealing_epochs * steps_per_epoch
             self.discriminator_scheduler.set_num_steps(discriminator_annealing_steps)
 
-        discriminator_beta = self.discriminator_scheduler.get()
+        adv_beta = self.discriminator_scheduler.get()
         if self.training:
             self.discriminator_scheduler.step()
 
-        gen_fool_disc_loss = self.adv_loss(
+        try:
+            optimizer_main, optimizer_disc = self.optimizers()
+        except:  # not attached to trainer
+            return {}
+
+        self.toggle_optimizer(optimizer_main)
+        gen_fool_disc_loss = adv_beta * self.adv_loss(
             self.discriminator(reconstructed)[-1],
             target_is_real=True,
             for_discriminator=False,
         )
-        disc_catch_gen_loss = discriminator_beta * self.adv_loss(
+        self.untoggle_optimizer(optimizer_main)
+
+        self.toggle_optimizer(optimizer_disc)
+        disc_catch_gen_loss = adv_beta * self.adv_loss(
             self.discriminator(reconstructed.detach())[-1],
             target_is_real=False,
             for_discriminator=True,
         )
-        disc_identify_real_loss = discriminator_beta * self.adv_loss(
+        disc_identify_real_loss = adv_beta * self.adv_loss(
             self.discriminator(x)[-1],
             target_is_real=True,
             for_discriminator=True,
         )
+        self.untoggle_optimizer(optimizer_disc)
 
         # logging
         if self.training:
             with torch.no_grad():
-                self.log(f"train_disc_step/beta", discriminator_beta, sync_dist=True, on_step=True, on_epoch=False)
+                self.log(f"train_adv_step/beta", adv_beta, sync_dist=True, on_step=True, on_epoch=False)
 
         return {
             "gen_fool_disc_loss": gen_fool_disc_loss,
@@ -236,8 +241,6 @@ class NVAELightning(MyLightningModule):
             for key in all_losses
             if not key.startswith("disc_")
         )
-        if self.current_epoch <= 50:
-            all_losses["autoencoder_loss"] *= 0.0  # Don't train for the first 50 epochs
 
     def calculate_discriminator_loss(self, all_losses):
         all_losses["discriminator_loss"] = sum(
@@ -312,19 +315,21 @@ class NVAELightning(MyLightningModule):
         self.manual_backward(all_losses["discriminator_loss"])
 
         # Update weights if it's time
-        if self.trainer.global_step % self.training_config.accumulate_grad_batches == 0:
+        if (batch_idx + 1) % self.training_config.accumulate_grad_batches == 0:
             # VAE
             self.clip_gradients(
                 optimizer_main, gradient_clip_val=self.training_config.gradient_clip_val, gradient_clip_algorithm="norm"
             )
             optimizer_main.step()
-            optimizer_main.zero_grad(set_to_none=True)
 
             # Discriminator
             self.clip_gradients(
                 optimizer_disc, gradient_clip_val=self.training_config.gradient_clip_val, gradient_clip_algorithm="norm"
             )
             optimizer_disc.step()
+
+            self.on_before_zero_grad(None)
+            optimizer_main.zero_grad(set_to_none=True)
             optimizer_disc.zero_grad(set_to_none=True)
 
             scheduler_main.step()
@@ -344,21 +349,25 @@ class NVAELightning(MyLightningModule):
         optimizer_main = torch.optim.Adam(main_params, lr=self.training_config.lr)
         optimizer_disc = torch.optim.Adam(disc_params, lr=2 * self.training_config.lr, betas=(0.5, 0.999))
 
-        total_steps = self.trainer.estimated_stepping_batches
-        scheduler_main = ConstantLRWithWarmup(optimizer_main, total_steps // 10)
+        total_steps = self.get_total_steps()
+        scheduler_main = ConstantLRWithWarmup(optimizer_main, max(1, total_steps // 10))
         scheduler_disc = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_disc, T_max=total_steps, eta_min=1e-6)
 
         return [
-            optimizer_main,
-            optimizer_disc,
-        ], [
-            {"scheduler": scheduler_main, "interval": "step"},
-            {"scheduler": scheduler_disc, "interval": "step"},
+            {"optimizer": optimizer_main, "lr_scheduler": {"scheduler": scheduler_main, "interval": "step"}},
+            {"optimizer": optimizer_disc, "lr_scheduler": {"scheduler": scheduler_disc, "interval": "step"}},
         ]
 
     def forward(self, x):
         o = self.autoencoder(x)
         return o
+
+    def get_total_steps(self):
+        # Divide by accumulate_grad_batches because of manual optimization
+        return self.trainer.estimated_stepping_batches // self.training_config.accumulate_grad_batches
+
+    def get_steps_per_epoch(self):
+        return self.trainer.estimated_stepping_batches * self.trainer.accumulate_grad_batches // self.trainer.max_epochs
 
 
 if __name__ == "__main__":
