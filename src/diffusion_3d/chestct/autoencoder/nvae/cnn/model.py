@@ -8,9 +8,8 @@ from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
 from monai.networks.nets import PatchDiscriminator
 from munch import Munch
 from torch.nn import L1Loss
-from vision_architectures.schedulers.cyclic import SineScheduler
+from vision_architectures.schedulers.cyclic import CyclicAnnealingScheduler
 from vision_architectures.schedulers.lrs import ConstantLRWithWarmup
-from vision_architectures.schedulers.sigmoid import SigmoidScheduler
 from vision_architectures.utils.clamping import floor_softplus_clamp
 
 from diffusion_3d.chestct.autoencoder.nvae.cnn.nn import NVAE
@@ -49,10 +48,10 @@ class NVAELightning(MyLightningModule):
         self.free_nats_per_dim = training_config.free_nats_per_dim
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
-        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=7)
+        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=2)
 
-        self.kl_beta_schedulers = {key: SineScheduler(0, 1, 0) for key in training_config.kl_annealing.keys()}
-        self.discriminator_scheduler = SigmoidScheduler()
+        self.kl_beta_schedulers = {key: CyclicAnnealingScheduler(0, 1) for key in training_config.kl_annealing.keys()}
+        self.discriminator_scheduler = CyclicAnnealingScheduler(0, 1)
 
         self.freeze_scales(training_config.freeze_scales)
 
@@ -89,8 +88,10 @@ class NVAELightning(MyLightningModule):
                 except RuntimeError:
                     steps_per_epoch = 100
                 kl_annealing_wavelength = self.training_config.kl_annealing[key]["wavelength"]
-                kl_annealing_steps = kl_annealing_wavelength * steps_per_epoch
-                self.kl_beta_schedulers[key].set_wavelength(kl_annealing_steps)
+                kl_annealing_wavelength_steps = kl_annealing_wavelength * steps_per_epoch
+                self.kl_beta_schedulers[key].set_num_annealing_steps(
+                    2 * kl_annealing_wavelength_steps // 3, kl_annealing_wavelength_steps // 3, 0, 0
+                )
 
             if self.current_epoch >= self.training_config.kl_annealing[key]["start_epoch"]:
                 kl_betas[key] = kl_beta_scheduler.get()
@@ -124,7 +125,7 @@ class NVAELightning(MyLightningModule):
         if self.training:
             with torch.no_grad():
                 log_dict = (
-                    {f"train_kl_step/beta_{key}": kl_beta for key, kl_beta in kl_betas.items()}
+                    {f"train_schedulers/kl_beta_{key}": kl_beta for key, kl_beta in kl_betas.items()}
                     | {f"train_kl_step/{k}": v for k, v in free_nats_ratios.items()}
                     | {
                         f"train_kl_step/kl_per_dim_scale_{i}": kl_divergence.mean()
@@ -162,9 +163,11 @@ class NVAELightning(MyLightningModule):
                 steps_per_epoch = self.get_steps_per_epoch()
             except RuntimeError:
                 steps_per_epoch = 100
-            discriminator_annealing_epochs = self.training_config.discriminator_annealing_epochs
+            discriminator_annealing_epochs = self.training_config.discriminator_annealing_wavelength
             discriminator_annealing_steps = discriminator_annealing_epochs * steps_per_epoch
-            self.discriminator_scheduler.set_num_steps(discriminator_annealing_steps)
+            self.discriminator_scheduler.set_num_annealing_steps(
+                2 * discriminator_annealing_steps // 3, discriminator_annealing_steps // 3, 0, 0
+            )
 
         adv_beta = self.discriminator_scheduler.get()
         if self.training:
@@ -184,12 +187,12 @@ class NVAELightning(MyLightningModule):
         self.untoggle_optimizer(optimizer_main)
 
         self.toggle_optimizer(optimizer_disc)
-        disc_catch_gen_loss = adv_beta * self.adv_loss(
+        disc_catch_gen_loss = self.adv_loss(
             self.discriminator(reconstructed.detach())[-1],
             target_is_real=False,
             for_discriminator=True,
         )
-        disc_identify_real_loss = adv_beta * self.adv_loss(
+        disc_identify_real_loss = self.adv_loss(
             self.discriminator(x)[-1],
             target_is_real=True,
             for_discriminator=True,
@@ -199,7 +202,7 @@ class NVAELightning(MyLightningModule):
         # logging
         if self.training:
             with torch.no_grad():
-                self.log(f"train_adv_step/beta", adv_beta, sync_dist=True, on_step=True, on_epoch=False)
+                self.log(f"train_schedulers/adv_beta", adv_beta, sync_dist=True, on_step=True, on_epoch=False)
 
         return {
             "gen_fool_disc_loss": gen_fool_disc_loss,
@@ -386,7 +389,7 @@ if __name__ == "__main__":
     }
     sample_output = autoencoder.process_step(sample_input, "train", 0)
 
-    print("Input shape: ", sample_input["image"].shape)
-    print()
-    # print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
-    print(sample_output["all_losses"], sample_output["all_metrics"])
+    # print("Input shape: ", sample_input["image"].shape)
+    # print()
+    # # print("Output:", *[f"{key}:\n{value}\n" for key, value in sample_output.items()], sep="\n")
+    # print(sample_output["all_losses"], sample_output["all_metrics"])

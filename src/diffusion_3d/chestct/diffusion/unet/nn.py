@@ -3,6 +3,7 @@ import torch
 from einops import repeat
 from munch import Munch
 from torch import nn
+from vision_architectures.layers.attention import Attention3D
 from vision_architectures.blocks.cnn import CNNBlock3D
 from vision_architectures.layers.latent_space import GaussianLatentSpace, LatentDecoder, LatentEncoder
 from vision_architectures.layers.scale import PixelShuffleDownsample3D, PixelShuffleUpsample3D

@@ -288,7 +288,7 @@ def get_config(training_image_size=(32, 32, 32)):
             checkpointing_level=0,
             freeze_scales=[],  # TODO
             #
-            fast_dev_run=False,
+            fast_dev_run=20,
             strategy="ddp_find_unused_parameters_true",
             #
             accumulate_grad_batches=1,  # TODO
@@ -356,6 +356,45 @@ def get_config(training_image_size=(32, 32, 32)):
     )
 
     return config
+
+
+def get_data_config():
+    return {
+        "_target_": "qct_cache.cache_loading.CacheLoader",
+        "_partial_": True,
+        "cache_roots": [
+            "/raid/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
+            "/raid4/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
+            "/raid2/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
+            "/raid12/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
+            "/cache/fast_data_nas8/niraj/qct_data_cache/3d_safetensors_seg_annot",
+        ],
+        "sampling_heads": "${datamodule.sampling_heads}",
+        "cropping_head": "nodule",
+        "downsample_config": {"shape": [32, 96, 96], "mode": ["padcrop", "padcrop", "padcrop"]},
+        "filter_config": None,
+        "characteristic_legend": {
+            "nodule_texture": {"nan": -100, "none": -100, "solid": 0, "part_solid": 1, "ground_glass_nodule": 2},
+            "nodule_spiculation": {"nan": -100, "none": -100, "no": 0, "yes": 1},
+            "nodule_calcification": {"nan": -100, "none": -100, "no": 0, "yes": 1},
+            "nodule_malignancy": {
+                "nan": -100,
+                "none": -100,
+                "highly unlikely": 0,
+                "moderately unlikely": 1,
+                "indeterminate": 2,
+                "moderately suspicious": 3,
+                "highly suspicious": 4,
+            },
+            "nodule_internalstructure": {
+                "nan": -100,
+                "none": -100,
+                "internalstructure_soft_tissue": 0,
+                "internalstructure_fat": 1,
+                "internalstructure_fat_and_soft_tissue": 2,
+            },
+        },
+    }
 
 
 if __name__ == "__main__":
