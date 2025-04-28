@@ -5,13 +5,13 @@ from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
 
 
-def get_config(training_image_size=(32, 32, 32)):
+def get_config(training_image_size=(128, 128, 128)):
     model_config = munchify(
         {
             "in_channels": 1,
-            "num_channels": [16, 32, 64],
-            "depths": [4, 4, 4],
-            "latent_dims": [None, None, 4],
+            "num_channels": [16, 32, 64, 128, 256],
+            "depths": [4, 4, 4, 4, 4],
+            "latent_dims": [None, None, 4, None, 16],
             "kernel_size": 3,
             "normalization": "groupnorm",
             "normalization_pre_args": [4],
@@ -20,7 +20,7 @@ def get_config(training_image_size=(32, 32, 32)):
             "latent": {
                 "kernel_size": 3,
                 "normalization": "groupnorm",
-                "normalization_pre_args_list": [None, None, 2],
+                "normalization_pre_args_list": [None, None, 2, None, 4],
                 "activation": "silu",
             },
         }
@@ -34,8 +34,8 @@ def get_config(training_image_size=(32, 32, 32)):
     # 2x compression, 2 latent, 16 input, 32 intermediate, effective 4x compression
     # 1x compression, No latent, Not trained separately, 16 intermediate
 
-    batch_size = 300
-    num_train_samples_per_datapoint = 100
+    batch_size = 8
+    num_train_samples_per_datapoint = 4
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -152,13 +152,13 @@ def get_config(training_image_size=(32, 32, 32)):
                                             "prob": 0.5,
                                         }
                                     ),
-                                    # compose_with_clipping_tranform( # TODO
-                                    #     {
-                                    #         "_target_": "monai.transforms.RandGaussianSharpend",
-                                    #         "keys": transformsd_keys,
-                                    #         "prob": 0.5,
-                                    #     }
-                                    # ),
+                                    compose_with_clipping_tranform(
+                                        {
+                                            "_target_": "monai.transforms.RandGaussianSharpend",
+                                            "keys": transformsd_keys,
+                                            "prob": 0.5,
+                                        }
+                                    ),
                                 ],
                             },
                         ],
@@ -247,7 +247,7 @@ def get_config(training_image_size=(32, 32, 32)):
     training_config = munchify(
         dict(
             # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v69__2025_04_23__epoch155/version_0/checkpoints/last.ckpt",
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v69__2025_04_23__epoch330/version_0/checkpoints/last.ckpt",
             #
             max_epochs=500,
             lr=1e-4,
@@ -260,8 +260,8 @@ def get_config(training_image_size=(32, 32, 32)):
                 "ms_ssim_loss": 0.1,
                 "gen_fool_disc_loss": 0.15,
                 #
-                "kl_loss_scale_2": 5e-5,  # TODO
-                # "kl_loss_scale_4": 1e-6, # TODO
+                "kl_loss_scale_2": 5e-6,
+                "kl_loss_scale_4": 1e-5,
                 #
                 "disc_catch_gen_loss": 0.5,
                 "disc_identify_real_loss": 0.5,
@@ -269,29 +269,29 @@ def get_config(training_image_size=(32, 32, 32)):
             kl_annealing={
                 "scale_2": {
                     "start_epoch": 0,
-                    # "wavelength": 30, # TODO
+                    "wavelength": 30,
+                },
+                "scale_4": {
+                    "start_epoch": 0,
                     "wavelength": 20,
                 },
-                # "scale_4": { # TODO
-                #     "start_epoch": 0,
-                #     "wavelength": 20,
-                # },
             },
             free_nats_per_dim={
                 "scale_2": 0.05,
-                # "scale_4": 0.05, # TODO
+                "scale_4": 0.05,
             },
             aur_threshold_per_dim=0.05,
             #
             discriminator_annealing_wavelength=25,
+            train_discriminator_every_gen_steps=2,
             #
             checkpointing_level=0,
-            freeze_scales=[],  # TODO
+            freeze_scales=[0, 1, 2],
             #
             fast_dev_run=False,
             strategy="ddp_find_unused_parameters_true",
             #
-            accumulate_grad_batches=1,  # TODO
+            accumulate_grad_batches=5,
             log_every_n_steps=1,
             gradient_clip_val=5.0,
         )
@@ -309,14 +309,16 @@ def get_config(training_image_size=(32, 32, 32)):
         f"Frozen scales: {training_config.freeze_scales}",
         #
         "NVAE",
-        "ms_ssim kernel = 2",  # TODO
-        "Moved to cyclic annealing instead of sine for KL",
-        "Moved to cyclic annealing instead of sigmoid for discriminator",
+        "ms_ssim kernel = 7",
+        "Training next scale i.e. 16x compression",
+        "Accumulate 5 batches",
+        "Added back gaussian sharpening augmentation",
+        "Note: first conv layer of decoder2 is trainable (as new input is comming from scale3)",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v69__2025_04_23__epoch280",
+            task_name="v70__2025_04_28__4xv69",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,

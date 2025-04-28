@@ -45,7 +45,8 @@ if config.training.start_from_checkpoint is not None:
 
     model = NVAELightning(config.model, config.training)
     state_dict = torch.load(config.training.start_from_checkpoint, map_location="cpu", weights_only=False)["state_dict"]
-    state_dict.pop("autoencoder.decoder.hidden_decoding", None)
+    state_dict.pop("autoencoder.decoder.stages.2.0.layers.0.conv1.conv.weight")
+    state_dict.pop("autoencoder.decoder.stages.2.0.layers.0.conv_res.conv.weight")
     model.load_state_dict(state_dict, strict=False)
 
     print(f"Started from: {config.training.start_from_checkpoint}")

@@ -1,7 +1,5 @@
-import math
-
 import torch
-from arjcode.model import MyLightningModule, freeze_module, freeze_modules
+from arjcode.model import MyLightningModule, freeze_module, freeze_modules, unfreeze_modules
 from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
@@ -48,7 +46,7 @@ class NVAELightning(MyLightningModule):
         self.free_nats_per_dim = training_config.free_nats_per_dim
 
         self.psnr_metric = PSNRMetric(max_val=2.0)
-        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=2)
+        self.ms_ssim_metric = MultiScaleSSIMMetric(spatial_dims=3, data_range=2.0, kernel_size=7)
 
         self.kl_beta_schedulers = {key: CyclicAnnealingScheduler(0, 1) for key in training_config.kl_annealing.keys()}
         self.discriminator_scheduler = CyclicAnnealingScheduler(0, 1)
@@ -56,6 +54,7 @@ class NVAELightning(MyLightningModule):
         self.freeze_scales(training_config.freeze_scales)
 
     def freeze_scales(self, scales):
+        scales = sorted(scales)
         if 0 in scales:
             freeze_module(self.autoencoder.encoder_mapping)
             freeze_module(self.autoencoder.decoder_mapping)
@@ -67,6 +66,13 @@ class NVAELightning(MyLightningModule):
                 ]
             )
             print(f"Freezing scale: {scale}")
+        unfreeze_modules(
+            [
+                self.autoencoder.decoder.stages[scales[-1]][0].layers[0].conv1.conv,
+                self.autoencoder.decoder.stages[scales[-1]][0].layers[0].conv_res.conv,
+            ]
+        )
+        print(f"Unfreezing autoencoder.decoder.stages[{scales[-1]}][0].layers[0].conv1.conv and conv_res.conv")
 
     def calculate_reconstruction_loss(self, reconstructed, x):
         return self.reconstruction_loss(reconstructed, x)
@@ -318,24 +324,29 @@ class NVAELightning(MyLightningModule):
         self.manual_backward(all_losses["discriminator_loss"])
 
         # Update weights if it's time
-        if (batch_idx + 1) % self.training_config.accumulate_grad_batches == 0:
+        update_main = (batch_idx + 1) % self.training_config.accumulate_grad_batches == 0
+        update_disc = (batch_idx + 1) % (
+            self.training_config.accumulate_grad_batches * self.training_config.train_discriminator_every_gen_steps
+        ) == 0
+
+        if update_main:
             # VAE
             self.clip_gradients(
                 optimizer_main, gradient_clip_val=self.training_config.gradient_clip_val, gradient_clip_algorithm="norm"
             )
             optimizer_main.step()
+            self.on_before_zero_grad(optimizer_main)
+            optimizer_main.zero_grad(set_to_none=True)
+            scheduler_main.step()
 
+        if update_disc:
             # Discriminator
             self.clip_gradients(
                 optimizer_disc, gradient_clip_val=self.training_config.gradient_clip_val, gradient_clip_algorithm="norm"
             )
             optimizer_disc.step()
-
-            self.on_before_zero_grad(None)
-            optimizer_main.zero_grad(set_to_none=True)
+            self.on_before_zero_grad(optimizer_disc)
             optimizer_disc.zero_grad(set_to_none=True)
-
-            scheduler_main.step()
             scheduler_disc.step()
 
     def validation_step(self, batch, batch_idx):

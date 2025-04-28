@@ -20,14 +20,14 @@ class ResBlock(nn.Module):
             checkpointing_level,
             in_channels=in_channels,
             out_channels=out_channels,
-            sequence="NAC",
+            sequence="CNA",
         )
         self.conv2 = CNNBlock3D(
             model_config,
             checkpointing_level,
             in_channels=out_channels,
             out_channels=out_channels,
-            sequence="NAC",
+            sequence="CNA",
         )
         self.conv_res = CNNBlock3D(
             model_config,
@@ -181,7 +181,10 @@ class LatentSpaceOps(nn.Module):
         latent_decoded = latent_decoder(latent)
 
         # Combine with previous decoder output
-        output = torch.cat((previous_decoder_output, latent_decoded), dim=1)
+        if previous_decoder_output is None:  # Deepest latent
+            output = latent_decoded
+        else:
+            output = torch.cat((previous_decoder_output, latent_decoded), dim=1)
 
         return output, latent, kl_divergence, (prior_mu, prior_sigma), (posterior_mu, posterior_sigma)
 
@@ -194,9 +197,6 @@ class Decoder(nn.Module):
         num_channels = config.num_channels
         latent_dims = config.latent_dims
 
-        # deepest "latent decoding"
-        self.hidden_decoding = nn.Parameter(torch.randn(num_channels[-1]), requires_grad=True)
-
         self.latent_space_ops = LatentSpaceOps(config, checkpointing_level)
 
         self.stages = nn.ModuleList([])
@@ -204,7 +204,7 @@ class Decoder(nn.Module):
             depth = depths[i]
             channels = num_channels[i]
             has_skip_conn = True
-            if latent_dims[i] is None:  # if not concatenating with sampled latent
+            if latent_dims[i] is None or i == len(depths) - 1:  # if not concatenating with sampled latent
                 has_skip_conn = False
 
             stage = nn.Sequential()
@@ -225,14 +225,12 @@ class Decoder(nn.Module):
             self.stages.append(stage)
 
     def forward(self, encodings: torch.Tensor):
-        b, _, z, y, x = encodings[-1].shape
-
         latents = [None] * len(encodings)
         kl_divergences = [None] * len(encodings)
         prior_distributions = [(None, None)] * len(encodings)
         posterior_distributions = [(None, None)] * len(encodings)
 
-        decoder_output = repeat(self.hidden_decoding, "d -> b d z y x", b=b, z=z, y=y, x=x)
+        decoder_output = None
         for i in range(len(encodings) - 1, -1, -1):
             encoding = encodings[i]
             encoding_after_latent, latent, kl_divergence, prior_distribution, posterior_distribution = (
