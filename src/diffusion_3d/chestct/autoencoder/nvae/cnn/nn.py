@@ -168,7 +168,7 @@ class LatentSpaceOps(nn.Module):
 
         # Create latent
         latent, kl_divergence = self.latent_space(
-            posterior_mu, posterior_sigma, prior_mu, prior_sigma, kl_divergence_reduction=None, force_sampling=True
+            posterior_mu, posterior_sigma, prior_mu, prior_sigma, kl_divergence_reduction=None, force_sampling=False
         )
 
         # if i == 4:
@@ -184,7 +184,7 @@ class LatentSpaceOps(nn.Module):
         if previous_decoder_output is None:  # Deepest latent
             output = latent_decoded
         else:
-            output = torch.cat((previous_decoder_output, latent_decoded), dim=1)
+            output = torch.cat((latent_decoded, previous_decoder_output), dim=1)
 
         return output, latent, kl_divergence, (prior_mu, prior_sigma), (posterior_mu, posterior_sigma)
 

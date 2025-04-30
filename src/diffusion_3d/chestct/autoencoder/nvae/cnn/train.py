@@ -6,6 +6,7 @@ from clearml import Task
 from config import get_config
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
+from torch import nn
 
 from diffusion_3d.chestct.autoencoder.nvae.cnn.model import NVAELightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
@@ -45,8 +46,13 @@ if config.training.start_from_checkpoint is not None:
 
     model = NVAELightning(config.model, config.training)
     state_dict = torch.load(config.training.start_from_checkpoint, map_location="cpu", weights_only=False)["state_dict"]
-    state_dict.pop("autoencoder.decoder.stages.2.0.layers.0.conv1.conv.weight")
-    state_dict.pop("autoencoder.decoder.stages.2.0.layers.0.conv_res.conv.weight")
+    for conv_layer in [
+        "autoencoder.decoder.stages.2.0.layers.0.conv1.conv",
+        "autoencoder.decoder.stages.2.0.layers.0.conv_res.conv",
+    ]:
+        shape = state_dict[f"{conv_layer}.weight"].shape
+        state_dict[f"{conv_layer}.weight"] = torch.cat([state_dict[f"{conv_layer}.weight"], torch.empty(shape)], dim=1)
+        nn.init.xavier_uniform_(state_dict[f"{conv_layer}.weight"][:, shape[1] :])
     model.load_state_dict(state_dict, strict=False)
 
     print(f"Started from: {config.training.start_from_checkpoint}")

@@ -1,5 +1,5 @@
 import torch
-from arjcode.model import MyLightningModule, freeze_module, freeze_modules, unfreeze_modules
+from arjcode.model import MyLightningModule, freeze_module, freeze_modules, unfreeze_module
 from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
@@ -66,13 +66,18 @@ class NVAELightning(MyLightningModule):
                 ]
             )
             print(f"Freezing scale: {scale}")
-        unfreeze_modules(
-            [
-                self.autoencoder.decoder.stages[scales[-1]][0].layers[0].conv1.conv,
-                self.autoencoder.decoder.stages[scales[-1]][0].layers[0].conv_res.conv,
-            ]
-        )
-        print(f"Unfreezing autoencoder.decoder.stages[{scales[-1]}][0].layers[0].conv1.conv and conv_res.conv")
+        for scale in scales[:-1]:
+            if self.autoencoder.decoder.latent_space_ops.latent_encoders[scale] is not None:
+                freeze_modules(
+                    [
+                        self.autoencoder.decoder.latent_space_ops.latent_encoders[scale],
+                        self.autoencoder.decoder.latent_space_ops.latent_decoders[scale],
+                        self.autoencoder.decoder.latent_space_ops.prior_estimators[scale],
+                    ]
+                )
+                print(f"Freezing latent space: {scale}")
+        unfreeze_module(self.autoencoder.decoder.stages[scales[-1]])
+        print(f"Unfreezing autoencoder.decoder.stages.{scales[-1]}")
 
     def calculate_reconstruction_loss(self, reconstructed, x):
         return self.reconstruction_loss(reconstructed, x)

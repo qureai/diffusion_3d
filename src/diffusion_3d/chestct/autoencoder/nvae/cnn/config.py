@@ -9,9 +9,9 @@ def get_config(training_image_size=(128, 128, 128)):
     model_config = munchify(
         {
             "in_channels": 1,
-            "num_channels": [16, 32, 64, 128, 256],
+            "num_channels": [16, 32, 64, 32, 64],
             "depths": [4, 4, 4, 4, 4],
-            "latent_dims": [None, None, 4, None, 16],
+            "latent_dims": [None, None, 4, None, 4],
             "kernel_size": 3,
             "normalization": "groupnorm",
             "normalization_pre_args": [4],
@@ -20,7 +20,7 @@ def get_config(training_image_size=(128, 128, 128)):
             "latent": {
                 "kernel_size": 3,
                 "normalization": "groupnorm",
-                "normalization_pre_args_list": [None, None, 2, None, 4],
+                "normalization_pre_args_list": [None, None, 2, None, 2],
                 "activation": "silu",
             },
         }
@@ -34,8 +34,8 @@ def get_config(training_image_size=(128, 128, 128)):
     # 2x compression, 2 latent, 16 input, 32 intermediate, effective 4x compression
     # 1x compression, No latent, Not trained separately, 16 intermediate
 
-    batch_size = 8
-    num_train_samples_per_datapoint = 4
+    batch_size = 9
+    num_train_samples_per_datapoint = 3
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -239,7 +239,7 @@ def get_config(training_image_size=(128, 128, 128)):
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
             test_batch_size=4,
-            train_sample_size=4_800,
+            train_sample_size=7_200,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -261,7 +261,7 @@ def get_config(training_image_size=(128, 128, 128)):
                 "gen_fool_disc_loss": 0.15,
                 #
                 "kl_loss_scale_2": 1e-6,
-                "kl_loss_scale_4": 1e-5,
+                "kl_loss_scale_4": 2e-5,
                 #
                 "disc_catch_gen_loss": 0.5,
                 "disc_identify_real_loss": 0.5,
@@ -311,14 +311,14 @@ def get_config(training_image_size=(128, 128, 128)):
         "NVAE",
         "ms_ssim kernel = 7",
         "Training next scale i.e. 16x compression",
-        "Accumulate 5 batches",
-        "Added back gaussian sharpening augmentation",
-        "Note: first conv layer of decoder2 is trainable (as new input is comming from scale3)",
+        "First stage of first decoder block is learnable with weights manipulation",
+        "Hidden dimensions of new scales reduced",
+        "Doubled kl_stage_4 weight",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v70__2025_04_28__4xv69",
+            task_name="v71__2025_04_30__4xv69",
             log_on_clearml=True,
             clearml_project="adaptive_autoencoder",
             clearml_tags=clearml_tags,
