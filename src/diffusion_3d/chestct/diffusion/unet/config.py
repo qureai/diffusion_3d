@@ -1,38 +1,26 @@
 import torch
-from munch import munchify
-
 from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
+from munch import munchify
 
 
-def get_config(training_image_size=(32, 32, 32)):
+def get_config(training_input_size=(32, 32, 32)):
     model_config = munchify(
         {
             "in_channels": 1,
-            "num_channels": [16, 32, 64],
-            "depths": [4, 4, 4],
-            "latent_dims": [None, None, 4],
+            "num_channels": [18, 36, 72, 144],
+            "depths": [4, 4, 4, 4],
+            "attn_num_heads": [None, None, 8, 8],
+            "timesteps": 1000,
+            "mid_depth": 8,
             "kernel_size": 3,
             "normalization": "groupnorm",
-            "normalization_pre_args": [4],
+            "normalization_pre_args": [6],
             "activation": "silu",
             "survival_prob": 1.0,
-            "latent": {
-                "kernel_size": 3,
-                "normalization": "groupnorm",
-                "normalization_pre_args_list": [None, None, 2],
-                "activation": "silu",
-            },
         }
     )
-
-    # 64x compression, 64 latent, 512 input, 1024 intermediate, effective 4096x compression
-    # 32x compression, 32 latent, 256 input, 512 intermediate, effective 1024x compression
-    # 16x compression, 16 latent, 128 input, 256 intermediate, effective 256x compression
-    # 8x compression, 8 latent, 64 input, 128 intermediate, effective 64x compression
-    # 4x compression, 4 latent, 32 input, 64 intermediate, effective 16x compression
-    # 2x compression, 2 latent, 16 input, 32 intermediate, effective 4x compression
-    # 1x compression, No latent, Not trained separately, 16 intermediate
+    model_config.time_channels = model_config.num_channels[-1] * 4
 
     batch_size = 300
     num_train_samples_per_datapoint = 100
@@ -64,7 +52,7 @@ def get_config(training_image_size=(32, 32, 32)):
             limited_dataset_size=None,
             #
             allowed_spacings=((0.4, 7), (-1, -1), (-1, -1)),
-            allowed_shapes=((training_image_size[0], -1), (256, -1), (256, -1)),
+            allowed_shapes=((training_input_size[0], -1), (256, -1), (256, -1)),
             #
             train_augmentations={
                 "_target_": "monai.transforms.Compose",
@@ -104,8 +92,8 @@ def get_config(training_image_size=(32, 32, 32)):
                     {
                         "_target_": "vision_architectures.transforms.croppad.RandSpatialCropSamplesWithCropTrackingd",
                         "keys": transformsd_keys,
-                        "roi_size": tuple(int(size * 0.8) for size in training_image_size),
-                        "max_roi_size": tuple(int(size * 1.2) for size in training_image_size),
+                        "roi_size": tuple(int(size * 0.8) for size in training_input_size),
+                        "max_roi_size": tuple(int(size * 1.2) for size in training_input_size),
                         "random_size": True,
                         "num_samples": num_train_samples_per_datapoint,
                     },
@@ -113,7 +101,7 @@ def get_config(training_image_size=(32, 32, 32)):
                         "_target_": "vision_architectures.transforms.spatial.ResizedWithCropTrackingd",
                         "keys": transformsd_keys,
                         "original_shape_key": "Shape",
-                        "spatial_size": training_image_size,
+                        "spatial_size": training_input_size,
                         "mode": "trilinear",
                         "anti_aliasing": True,
                     },
@@ -187,14 +175,14 @@ def get_config(training_image_size=(32, 32, 32)):
                     {
                         "_target_": "vision_architectures.transforms.croppad.RandSpatialCropSamplesWithCropTrackingd",
                         "keys": transformsd_keys,
-                        "roi_size": training_image_size,
+                        "roi_size": training_input_size,
                         "num_samples": num_val_samples_per_datapoint,
                     },
                     {  # In case image gets cropped to smaller size than required size
                         "_target_": "vision_architectures.transforms.spatial.ResizedWithCropTrackingd",
                         "keys": transformsd_keys,
                         "original_shape_key": "Shape",
-                        "spatial_size": training_image_size,
+                        "spatial_size": training_input_size,
                         "mode": "trilinear",
                         "anti_aliasing": True,
                     },
@@ -222,13 +210,13 @@ def get_config(training_image_size=(32, 32, 32)):
                     {
                         "_target_": "monai.transforms.CenterSpatialCropd",
                         "keys": transformsd_keys,
-                        "roi_size": training_image_size,
+                        "roi_size": training_input_size,
                     },
                     {  # In case image gets cropped to smaller size than required size
                         "_target_": "vision_architectures.transforms.spatial.ResizedWithCropTrackingd",
                         "keys": transformsd_keys,
                         "original_shape_key": "Shape",
-                        "spatial_size": training_image_size,
+                        "spatial_size": training_input_size,
                         "mode": "trilinear",
                         "anti_aliasing": True,
                     },
@@ -300,18 +288,12 @@ def get_config(training_image_size=(32, 32, 32)):
     compression_factor = 2 ** (len(model_config.depths) - 1)
 
     clearml_tags = [
-        f"Training image size: {training_image_size}",
+        f"Training image size: {training_input_size}",
         f"Dimensions: {model_config.num_channels}",
-        f"Latent dimensions: {model_config.latent_dims}",
         f"Train batch size: {data_config.train_batch_size}",
-        f"Compression: {compression_factor}",
         f"Checkpointing level: {training_config.checkpointing_level}",
-        f"Frozen scales: {training_config.freeze_scales}",
         #
-        "NVAE",
-        "ms_ssim kernel = 2",  # TODO
-        "Moved to cyclic annealing instead of sine for KL",
-        "Moved to cyclic annealing instead of sigmoid for discriminator",
+        "LDM",
     ]
 
     additional_config = munchify(
@@ -351,7 +333,7 @@ def get_config(training_image_size=(32, 32, 32)):
             distributed=distributed_config,
             additional=additional_config,
             #
-            image_size=training_image_size,
+            input_size=training_input_size,
         )
     )
 

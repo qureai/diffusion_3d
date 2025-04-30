@@ -1,5 +1,5 @@
 from arjcode.model import MyLightningModule
 
 
-class DiffusionUNetLightning(MyLightningModule):
+class LDMLightning(MyLightningModule):
     pass

@@ -365,7 +365,9 @@ class NVAELightning(MyLightningModule):
 
         total_steps = self.get_total_steps()
         scheduler_main = ConstantLRWithWarmup(optimizer_main, max(1, total_steps // 10))
-        scheduler_disc = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_disc, T_max=total_steps, eta_min=1e-6)
+        scheduler_disc = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer_disc, T_max=total_steps // self.training_config.train_discriminator_every_gen_steps, eta_min=1e-6
+        )
 
         return [
             {"optimizer": optimizer_main, "lr_scheduler": {"scheduler": scheduler_main, "interval": "step"}},

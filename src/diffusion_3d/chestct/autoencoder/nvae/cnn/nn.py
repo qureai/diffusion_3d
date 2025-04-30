@@ -168,7 +168,7 @@ class LatentSpaceOps(nn.Module):
 
         # Create latent
         latent, kl_divergence = self.latent_space(
-            posterior_mu, posterior_sigma, prior_mu, prior_sigma, kl_divergence_reduction=None
+            posterior_mu, posterior_sigma, prior_mu, prior_sigma, kl_divergence_reduction=None, force_sampling=True
         )
 
         # if i == 4:

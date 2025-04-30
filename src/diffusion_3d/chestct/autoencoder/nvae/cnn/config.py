@@ -239,7 +239,7 @@ def get_config(training_image_size=(128, 128, 128)):
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
             test_batch_size=4,
-            train_sample_size=7_200,
+            train_sample_size=4_800,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -249,7 +249,7 @@ def get_config(training_image_size=(128, 128, 128)):
             # start_from_checkpoint=None,
             start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v69__2025_04_23__epoch330/version_0/checkpoints/last.ckpt",
             #
-            max_epochs=500,
+            max_epochs=1000,
             lr=1e-4,
             seed=42,
             check_val_every_n_epoch=1,
@@ -260,7 +260,7 @@ def get_config(training_image_size=(128, 128, 128)):
                 "ms_ssim_loss": 0.1,
                 "gen_fool_disc_loss": 0.15,
                 #
-                "kl_loss_scale_2": 5e-6,
+                "kl_loss_scale_2": 1e-6,
                 "kl_loss_scale_4": 1e-5,
                 #
                 "disc_catch_gen_loss": 0.5,
