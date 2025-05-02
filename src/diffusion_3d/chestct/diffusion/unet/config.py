@@ -1,3 +1,8 @@
+import os
+
+triton_cache_dir = r"/raid/arjun/triton_cache"
+os.environ["TRITON_CACHE_DIR"] = triton_cache_dir
+
 import torch
 from diffusion_3d.constants import SERVER_MAPPING
 from diffusion_3d.utils.environment import set_multi_node_environment
@@ -22,8 +27,8 @@ def get_config(training_input_size=(96, 96, 96)):
     )
     model_config.time_channels = model_config.num_channels[0] * 4
 
-    batch_size = 16
-    num_train_samples_per_datapoint = 4
+    batch_size = 5
+    num_train_samples_per_datapoint = 5
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -243,7 +248,7 @@ def get_config(training_input_size=(96, 96, 96)):
             max_epochs=1000,
             lr=1e-4,
             seed=42,
-            check_val_every_n_epoch=1,
+            check_val_every_n_epoch=5,
             #
             loss_weights={
                 "l1_loss": 0.5,
@@ -251,15 +256,19 @@ def get_config(training_input_size=(96, 96, 96)):
             },
             #
             val_timesteps=200,
+            val_ddim_eta=0.0,
+            val_ddim_skip_steps=20,
             #
             checkpointing_level=0,
             #
-            fast_dev_run=20,
-            # strategy="ddp",
+            fast_dev_run=10,
+            strategy={
+                "_target_": "lightning.pytorch.strategies.fsdp.FSDPStrategy",
+            },
             #
             accumulate_grad_batches=5,
             log_every_n_steps=1,
-            gradient_clip_val=5.0,
+            # gradient_clip_val=5.0,
         )
     )
 
@@ -273,6 +282,8 @@ def get_config(training_input_size=(96, 96, 96)):
         "Cosine noise scheduler",
         "Uniform timestep sampling",
         "Always conditioned on timesteps, spacings",
+        "No gradient clipping",
+        "Using FSDP",
     ]
 
     additional_config = munchify(

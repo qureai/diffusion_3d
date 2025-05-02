@@ -6,9 +6,9 @@ from clearml import Task
 from config import get_config
 from diffusion_3d.chestct.diffusion.unet.model import Diffusion3DLightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
+from hydra.utils import instantiate
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
-from lightning.pytorch.strategies import DeepSpeedStrategy
 
 torch.set_float32_matmul_precision("medium")
 
@@ -90,8 +90,8 @@ trainer = L.Trainer(
     fast_dev_run=config.training.fast_dev_run,
     accumulate_grad_batches=config.training.accumulate_grad_batches if not config.training.fast_dev_run else 1,
     log_every_n_steps=config.training.log_every_n_steps,
-    strategy=DeepSpeedStrategy(),
-    gradient_clip_val=config.training.gradient_clip_val,
+    strategy=instantiate(config.training.strategy),
+    # gradient_clip_val=config.training.gradient_clip_val,
     devices=devices,
     plugins=plugins,
     num_nodes=num_nodes,

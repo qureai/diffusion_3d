@@ -83,10 +83,14 @@ class Diffusion3DLightning(MyLightningModule):
             self.training_config.loss_weights[key] * all_losses[key] for key in all_losses
         )
 
-    def process_training_step(self, batch, batch_idx=-1):
+    def process_batch(self, batch):
         x0 = batch["image"]
-        spacings = batch["spacing"]
+        spacings = torch.stack(batch["Spacing"], dim=1)
         # crop_offsets = batch["crop_offset"]
+        return x0, spacings
+
+    def process_training_step(self, batch, batch_idx=-1):
+        x0, spacings = self.process_batch(batch)
 
         batch_size = x0.shape[0]
 
@@ -141,24 +145,24 @@ class Diffusion3DLightning(MyLightningModule):
         return all_losses["denoiser_loss"]
 
     def process_validation_step(self, batch, batch_idx=-1):
-        x0 = batch["image"]
-        spacings = batch["spacing"]
-        # crop_offsets = batch["crop_offset"]
+        x0, spacings = self.process_batch(batch)
 
         batch_size = x0.shape[0]
 
-        timesteps = torch.full((batch_size,), self.training_config.val_timesteps)
+        timesteps = torch.full((batch_size,), self.training_config.val_timesteps, device=x0.device)
         noise = torch.randn_like(x0)
         guidance = torch.ones((2, batch_size)).to(x0.device)
 
         xt = self.noise_scheduler.add_noise(x0, timesteps, noise)
 
-        for t in range(self.training_config.val_timesteps, 0, -1):
+        for t in range(self.training_config.val_timesteps, 0, -self.training_config.val_ddim_skip_steps):
             noise_pred = self(xt, timesteps, spacings, guidance)
-            _, xt_minus_1 = self.noise_scheduler.remove_noise(xt, noise_pred, timesteps)
+            _, xt_minus_1 = self.noise_scheduler.remove_noise(
+                xt, noise_pred, timesteps, eta=self.training_config.val_ddim_eta
+            )
 
             xt = xt_minus_1
-            timesteps = torch.full((batch_size,), t)
+            timesteps = torch.full((batch_size,), t, device=x0.device)
 
         all_metrics = self.calculate_val_metrics(xt, x0)
 
