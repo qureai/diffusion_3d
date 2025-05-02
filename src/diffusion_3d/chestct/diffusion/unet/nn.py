@@ -1,16 +1,54 @@
 import numpy as np
 import torch
-from einops import repeat
+from einops import rearrange
 from munch import Munch
 from torch import nn
 from vision_architectures.blocks.cnn import CNNBlock3D
 from vision_architectures.blocks.transformer import TransformerEncoderBlock3D
-from vision_architectures.layers.embeddings import AbsolutePositionEmbeddings3D, get_absolute_timestep_embeddings_1d
+from vision_architectures.layers.embeddings import AbsolutePositionEmbeddings3D, get_timestep_embeddings_1d
 from vision_architectures.layers.scale import PixelShuffleDownsample3D, PixelShuffleUpsample3D
 from vision_architectures.utils.activation_checkpointing import ActivationCheckpointing
 from vision_architectures.utils.activations import get_act_layer
 from vision_architectures.utils.rearrange import rearrange_channels
 from vision_architectures.utils.residuals import Residual, add_stochastic_depth_dropout
+
+
+class Conditioning(nn.Module):
+    def __init__(self, time_channels: int, out_channels: int, activation: str = "silu"):
+        super().__init__()
+
+        def get_embedding_module(in_channels: int, out_channels: int):
+            return nn.Sequential(
+                nn.Linear(in_channels, out_channels),
+                get_act_layer(activation),
+                nn.Linear(out_channels, out_channels),
+            )
+
+        self.proj_timestep = get_embedding_module(time_channels, out_channels)
+        self.proj_spacings = get_embedding_module(3, out_channels)
+
+    def forward(self, x: torch.Tensor, time_emb: torch.Tensor, spacings: torch.Tensor, guidance: torch.Tensor):
+        # guidance shape: (num_conditioning_factors, b)
+
+        # Timestep conditioning
+        time_cond = self.proj_timestep(time_emb)[0]
+        # (b, d)
+        time_cond = guidance[0, :, None] * time_cond
+        # (b, d)
+        time_cond = rearrange(time_cond, "b d -> b d 1 1 1")
+        # (b, d, 1, 1, 1)
+        x = x + time_cond
+
+        # spacings conditioning
+        spacings_cond = self.proj_spacings(spacings)
+        # (b, d)
+        spacings_cond = guidance[1, :, None] * spacings_cond
+        # (b, d)
+        spacings_cond = rearrange(spacings_cond, "b d -> b d 1 1 1")
+        # (b, d, 1, 1, 1)
+        x = x + spacings_cond
+
+        return x
 
 
 class ResBlock(nn.Module):
@@ -43,17 +81,12 @@ class ResBlock(nn.Module):
         )
         self.residual = Residual()
 
-        self.proj_timestep = nn.Sequential(
-            nn.Linear(time_channels, out_channels),
-            get_act_layer(model_config.get("activation", "silu")),
-        )
+        self.condition = Conditioning(time_channels, out_channels, model_config.activation)
 
-    def forward(self, x, time_emb):
-        time_emb = repeat(self.proj_timestep(time_emb), "1 b d -> b d 1 1 1")
-
+    def forward(self, x, time_emb, spacings, guidance: torch.Tensor):
         res = self.conv_res(x)
         x = self.conv1(x)
-        x = x + time_emb
+        x = self.condition(x, time_emb, spacings, guidance)
         x = self.conv2(x)
         x = self.residual(x, res)
         return x
@@ -91,7 +124,14 @@ class StageBlock(nn.Module):
 
         self.checkpointing_level3 = ActivationCheckpointing(3, checkpointing_level)
 
-    def _forward(self, x: torch.Tensor, time_emb: torch.Tensor, channels_first: bool = True):
+    def _forward(
+        self,
+        x: torch.Tensor,
+        time_emb: torch.Tensor,
+        spacings: torch.Tensor,
+        guidance: torch.Tensor,
+        channels_first: bool = True,
+    ):
         # x: (b, [dim], z, y, x, [dim])
 
         x = rearrange_channels(x, channels_first, True)
@@ -101,7 +141,7 @@ class StageBlock(nn.Module):
             if isinstance(layer, TransformerEncoderBlock3D):
                 x = layer(self.position_embeddings(x))
             else:
-                x = layer(x, time_emb)
+                x = layer(x, time_emb, spacings, guidance)
         # (b, dim, z, y, x)
 
         x = rearrange_channels(x, True, channels_first)
@@ -143,12 +183,12 @@ class Encoder(nn.Module):
             )
             self.stages.append(stage)
 
-    def forward(self, x: torch.Tensor, time_emb: torch.Tensor):
+    def forward(self, x: torch.Tensor, time_emb: torch.Tensor, spacings: torch.Tensor, guidance: torch.Tensor):
         encodings = []
         for stage in self.stages:
             for i in range(len(stage)):
                 if i == len(stage) - 1:
-                    x = stage[i](x, time_emb)
+                    x = stage[i](x, time_emb, spacings, guidance)
                 else:
                     x = stage[i](x)
             encodings.append(x)
@@ -166,8 +206,8 @@ class Processor(nn.Module):
             channels, time_channels, config, config.mid_depth, False, config.attn_num_heads[-1], checkpointing_level
         )
 
-    def forward(self, x: torch.Tensor, time_emb: torch.Tensor):
-        encodings = self.stage(x, time_emb)
+    def forward(self, x: torch.Tensor, time_emb: torch.Tensor, spacings: torch.Tensor, guidance: torch.Tensor):
+        encodings = self.stage(x, time_emb, spacings, guidance)
         return encodings
 
 
@@ -206,7 +246,14 @@ class Decoder(nn.Module):
 
             self.stages.append(stage)
 
-    def forward(self, mid_out: torch.Tensor, encodings: torch.Tensor, time_emb: torch.Tensor):
+    def forward(
+        self,
+        mid_out: torch.Tensor,
+        encodings: torch.Tensor,
+        time_emb: torch.Tensor,
+        spacings: torch.Tensor,
+        guidance: torch.Tensor,
+    ):
         for i in range(len(encodings) - 1, -1, -1):
             if i == len(encodings) - 1:
                 decoder_input = mid_out
@@ -216,14 +263,14 @@ class Decoder(nn.Module):
 
             for j in range(len(self.stages[i])):
                 if j == 0:
-                    decoder_output = self.stages[i][j](decoder_input, time_emb)
+                    decoder_output = self.stages[i][j](decoder_input, time_emb, spacings, guidance)
                 else:
                     decoder_output = self.stages[i][j](decoder_output)
 
         return decoder_output
 
 
-class LDM(nn.Module):
+class Diffusion3D(nn.Module):
     def __init__(self, model_config: dict, checkpointing_level: int = 0):
         super().__init__()
 
@@ -250,19 +297,17 @@ class LDM(nn.Module):
             activation="tanh",
         )
 
-        self.time_embs = get_absolute_timestep_embeddings_1d(model_config.time_channels, model_config.timesteps)
-
         if model_config.survival_prob < 1.0:
             self.encoder = add_stochastic_depth_dropout(self.encoder, model_config.survival_prob)
             self.decoder = add_stochastic_depth_dropout(self.decoder, model_config.survival_prob)
 
-    def forward(self, x, timesteps):
-        time_emb = self.time_embs[:, timesteps].to(x.device)
+    def forward(self, x, timesteps, spacings, guidance):
+        time_emb = get_timestep_embeddings_1d(self.model_config.time_channels, timesteps)
 
         x = self.encoder_mapping(x)
-        encodings = self.encoder(x, time_emb)
-        mid_out = self.processor(encodings[-1], time_emb)
-        decoded = self.decoder(mid_out, encodings, time_emb)
+        encodings = self.encoder(x, time_emb, spacings, guidance)
+        mid_out = self.processor(encodings[-1], time_emb, spacings, guidance)
+        decoded = self.decoder(mid_out, encodings, time_emb, spacings, guidance)
         noise = self.decoder_mapping(decoded)
 
         return noise
@@ -280,7 +325,7 @@ if __name__ == "__main__":
     device = torch.device("cpu")
     device = torch.device("cuda:0")
 
-    ldm = LDM(config.model, 0).to(device)
+    ldm = Diffusion3D(config.model, 0).to(device)
     describe_model(ldm)
 
     ldm.train()
@@ -291,10 +336,12 @@ if __name__ == "__main__":
     initial_mem = process.memory_info().rss  # in bytes
 
     sample_input = torch.zeros((1, 1, *config.input_size)).to(device)
-    timesteps = torch.randint(0, config.model.timesteps, (1,))
+    timesteps = torch.randint(0, config.model.timesteps, (1,)).to(device)
+    spacings = torch.rand((1, 3)).to(device)
+    guidance = torch.randint(0, 5, (2, 1)).to(device)
 
     tic = perf_counter()
-    sample_output = ldm(sample_input, timesteps)
+    sample_output = ldm(sample_input, timesteps, spacings, guidance)
     toc = perf_counter()
     forward_time = toc - tic
 

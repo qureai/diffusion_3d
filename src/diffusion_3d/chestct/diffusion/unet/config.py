@@ -4,7 +4,7 @@ from diffusion_3d.utils.environment import set_multi_node_environment
 from munch import munchify
 
 
-def get_config(training_input_size=(32, 32, 32)):
+def get_config(training_input_size=(96, 96, 96)):
     model_config = munchify(
         {
             "in_channels": 1,
@@ -20,13 +20,16 @@ def get_config(training_input_size=(32, 32, 32)):
             "survival_prob": 1.0,
         }
     )
-    model_config.time_channels = model_config.num_channels[-1] * 4
+    model_config.time_channels = model_config.num_channels[0] * 4
 
-    batch_size = 300
-    num_train_samples_per_datapoint = 100
+    batch_size = 16
+    num_train_samples_per_datapoint = 4
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
+
+    ct_min_hu = -1250
+    ct_max_hu = 250
 
     clipping_transform = {
         "_target_": "vision_architectures.transforms.clipping.Clipd",
@@ -47,7 +50,7 @@ def get_config(training_input_size=(32, 32, 32)):
         dict(
             csvpath=r"/raid3/arjun/ct_pretraining/csvs/sources.csv",
             datapath=r"/raid3/arjun/ct_pretraining/scans/",
-            checkpointspath=r"/raid3/arjun/checkpoints/adaptive_autoencoder/",
+            checkpointspath=r"/raid3/arjun/checkpoints/diffusion_3d/",
             #
             limited_dataset_size=None,
             #
@@ -66,8 +69,8 @@ def get_config(training_input_size=(32, 32, 32)):
                     {
                         "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
                         "keys": transformsd_keys,
-                        "a_min": -1500,
-                        "a_max": 1500,
+                        "a_min": ct_min_hu,
+                        "a_max": ct_max_hu,
                         "b_min": -1.0,
                         "b_max": 1.0,
                         "clip": True,
@@ -140,13 +143,13 @@ def get_config(training_input_size=(32, 32, 32)):
                                             "prob": 0.5,
                                         }
                                     ),
-                                    # compose_with_clipping_tranform( # TODO
-                                    #     {
-                                    #         "_target_": "monai.transforms.RandGaussianSharpend",
-                                    #         "keys": transformsd_keys,
-                                    #         "prob": 0.5,
-                                    #     }
-                                    # ),
+                                    compose_with_clipping_tranform(
+                                        {
+                                            "_target_": "monai.transforms.RandGaussianSharpend",
+                                            "keys": transformsd_keys,
+                                            "prob": 0.5,
+                                        }
+                                    ),
                                 ],
                             },
                         ],
@@ -166,8 +169,8 @@ def get_config(training_input_size=(32, 32, 32)):
                     {
                         "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
                         "keys": transformsd_keys,
-                        "a_min": -1500,
-                        "a_max": 1500,
+                        "a_min": ct_min_hu,
+                        "a_max": ct_max_hu,
                         "b_min": -1.0,
                         "b_max": 1.0,
                         "clip": True,
@@ -201,8 +204,8 @@ def get_config(training_input_size=(32, 32, 32)):
                     {
                         "_target_": "monai.transforms.ScaleIntensityRanged",  # Windowing
                         "keys": transformsd_keys,
-                        "a_min": -1500,
-                        "a_max": 1500,
+                        "a_min": ct_min_hu,
+                        "a_max": ct_max_hu,
                         "b_min": -1.0,
                         "b_max": 1.0,
                         "clip": True,
@@ -227,65 +230,38 @@ def get_config(training_input_size=(32, 32, 32)):
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
             test_batch_size=4,
-            train_sample_size=7_200,
+            train_sample_size=9_600,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
 
     training_config = munchify(
         dict(
-            # start_from_checkpoint=None,
-            start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v69__2025_04_23__epoch155/version_0/checkpoints/last.ckpt",
+            start_from_checkpoint=None,
+            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v69__2025_04_23__epoch155/version_0/checkpoints/last.ckpt",
             #
-            max_epochs=500,
+            max_epochs=1000,
             lr=1e-4,
             seed=42,
             check_val_every_n_epoch=1,
             #
             loss_weights={
-                "reconstruction_loss": 0.9,
-                "perceptual_loss": 0.3,
-                "ms_ssim_loss": 0.1,
-                "gen_fool_disc_loss": 0.15,
-                #
-                "kl_loss_scale_2": 5e-5,  # TODO
-                # "kl_loss_scale_4": 1e-6, # TODO
-                #
-                "disc_catch_gen_loss": 0.5,
-                "disc_identify_real_loss": 0.5,
+                "l1_loss": 0.5,
+                "l2_loss": 0.5,
             },
-            kl_annealing={
-                "scale_2": {
-                    "start_epoch": 0,
-                    # "wavelength": 30, # TODO
-                    "wavelength": 20,
-                },
-                # "scale_4": { # TODO
-                #     "start_epoch": 0,
-                #     "wavelength": 20,
-                # },
-            },
-            free_nats_per_dim={
-                "scale_2": 0.05,
-                # "scale_4": 0.05, # TODO
-            },
-            aur_threshold_per_dim=0.05,
             #
-            discriminator_annealing_wavelength=25,
+            val_timesteps=200,
             #
             checkpointing_level=0,
-            freeze_scales=[],  # TODO
             #
             fast_dev_run=20,
-            strategy="ddp_find_unused_parameters_true",
+            # strategy="ddp",
             #
-            accumulate_grad_batches=1,  # TODO
+            accumulate_grad_batches=5,
             log_every_n_steps=1,
             gradient_clip_val=5.0,
         )
     )
-
-    compression_factor = 2 ** (len(model_config.depths) - 1)
 
     clearml_tags = [
         f"Training image size: {training_input_size}",
@@ -293,14 +269,17 @@ def get_config(training_input_size=(32, 32, 32)):
         f"Train batch size: {data_config.train_batch_size}",
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
-        "LDM",
+        "Base experiment",
+        "Cosine noise scheduler",
+        "Uniform timestep sampling",
+        "Always conditioned on timesteps, spacings",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v69__2025_04_23__epoch280",
+            task_name="v1__2025_05_02",
             log_on_clearml=True,
-            clearml_project="adaptive_autoencoder",
+            clearml_project="diffusion_3d",
             clearml_tags=clearml_tags,
         )
     )
@@ -340,43 +319,43 @@ def get_config(training_input_size=(32, 32, 32)):
     return config
 
 
-def get_data_config():
-    return {
-        "_target_": "qct_cache.cache_loading.CacheLoader",
-        "_partial_": True,
-        "cache_roots": [
-            "/raid/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
-            "/raid4/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
-            "/raid2/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
-            "/raid12/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
-            "/cache/fast_data_nas8/niraj/qct_data_cache/3d_safetensors_seg_annot",
-        ],
-        "sampling_heads": "${datamodule.sampling_heads}",
-        "cropping_head": "nodule",
-        "downsample_config": {"shape": [32, 96, 96], "mode": ["padcrop", "padcrop", "padcrop"]},
-        "filter_config": None,
-        "characteristic_legend": {
-            "nodule_texture": {"nan": -100, "none": -100, "solid": 0, "part_solid": 1, "ground_glass_nodule": 2},
-            "nodule_spiculation": {"nan": -100, "none": -100, "no": 0, "yes": 1},
-            "nodule_calcification": {"nan": -100, "none": -100, "no": 0, "yes": 1},
-            "nodule_malignancy": {
-                "nan": -100,
-                "none": -100,
-                "highly unlikely": 0,
-                "moderately unlikely": 1,
-                "indeterminate": 2,
-                "moderately suspicious": 3,
-                "highly suspicious": 4,
-            },
-            "nodule_internalstructure": {
-                "nan": -100,
-                "none": -100,
-                "internalstructure_soft_tissue": 0,
-                "internalstructure_fat": 1,
-                "internalstructure_fat_and_soft_tissue": 2,
-            },
-        },
-    }
+# def get_data_config():
+#     return {
+#         "_target_": "qct_cache.cache_loading.CacheLoader",
+#         "_partial_": True,
+#         "cache_roots": [
+#             "/raid/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
+#             "/raid4/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
+#             "/raid2/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
+#             "/raid12/niraj/storage/qct_data_cache/3d_safetensors_seg_annot",
+#             "/cache/fast_data_nas8/niraj/qct_data_cache/3d_safetensors_seg_annot",
+#         ],
+#         "sampling_heads": "${datamodule.sampling_heads}",
+#         "cropping_head": "nodule",
+#         "downsample_config": {"shape": [32, 96, 96], "mode": ["padcrop", "padcrop", "padcrop"]},
+#         "filter_config": None,
+#         "characteristic_legend": {
+#             "nodule_texture": {"nan": -100, "none": -100, "solid": 0, "part_solid": 1, "ground_glass_nodule": 2},
+#             "nodule_spiculation": {"nan": -100, "none": -100, "no": 0, "yes": 1},
+#             "nodule_calcification": {"nan": -100, "none": -100, "no": 0, "yes": 1},
+#             "nodule_malignancy": {
+#                 "nan": -100,
+#                 "none": -100,
+#                 "highly unlikely": 0,
+#                 "moderately unlikely": 1,
+#                 "indeterminate": 2,
+#                 "moderately suspicious": 3,
+#                 "highly suspicious": 4,
+#             },
+#             "nodule_internalstructure": {
+#                 "nan": -100,
+#                 "none": -100,
+#                 "internalstructure_soft_tissue": 0,
+#                 "internalstructure_fat": 1,
+#                 "internalstructure_fat_and_soft_tissue": 2,
+#             },
+#         },
+#     }
 
 
 if __name__ == "__main__":
