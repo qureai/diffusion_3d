@@ -27,8 +27,8 @@ def get_config(training_input_size=(96, 96, 96)):
     )
     model_config.time_channels = model_config.num_channels[0] * 4
 
-    batch_size = 5
-    num_train_samples_per_datapoint = 5
+    batch_size = 8
+    num_train_samples_per_datapoint = 4
     num_val_samples_per_datapoint = batch_size
 
     transformsd_keys = ["image"]
@@ -235,7 +235,7 @@ def get_config(training_input_size=(96, 96, 96)):
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
             test_batch_size=4,
-            train_sample_size=9_600,
+            train_sample_size=4_800,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
@@ -261,7 +261,7 @@ def get_config(training_input_size=(96, 96, 96)):
             #
             checkpointing_level=0,
             #
-            fast_dev_run=10,
+            fast_dev_run=False,
             strategy={
                 "_target_": "lightning.pytorch.strategies.fsdp.FSDPStrategy",
             },

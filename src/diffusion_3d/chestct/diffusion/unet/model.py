@@ -96,7 +96,7 @@ class Diffusion3DLightning(MyLightningModule):
 
         timesteps = self.timestep_sampler(batch_size).to(x0.device)
         noise = torch.randn_like(x0)
-        guidance = torch.ones((2, batch_size)).to(x0.device)
+        guidance = torch.ones((2, batch_size)).to(x0)
 
         xt = self.noise_scheduler.add_noise(x0, timesteps, noise)
 
@@ -114,12 +114,13 @@ class Diffusion3DLightning(MyLightningModule):
 
             for key, value in all_losses.items():
                 scaled_value = self.training_config.loss_weights.get(key, 1.0) * value
-                step_log[f"train_step/{key}"] = float(value)
-                step_log[f"train_step_scaled/{key}"] = float(scaled_value)
+                step_log[f"train_step_loss/{key}"] = float(value)
+                step_log[f"train_step_loss_scaled/{key}"] = float(scaled_value)
                 epoch_log[f"train_epoch_loss/{key}"] = float(value)
                 epoch_log[f"train_epoch_loss_scaled/{key}"] = float(scaled_value)
 
             for key, value in all_metrics.items():
+                step_log[f"train_step_metrics/{key}"] = float(value)
                 epoch_log[f"train_epoch_metrics/{key}"] = float(value)
 
             try:
@@ -149,21 +150,22 @@ class Diffusion3DLightning(MyLightningModule):
 
         batch_size = x0.shape[0]
 
-        timesteps = torch.full((batch_size,), self.training_config.val_timesteps, device=x0.device)
+        timesteps = torch.full((batch_size,), self.training_config.val_timesteps + 1, device=x0.device)
         noise = torch.randn_like(x0)
-        guidance = torch.ones((2, batch_size)).to(x0.device)
+        guidance = torch.ones((2, batch_size)).to(x0)
 
         xt = self.noise_scheduler.add_noise(x0, timesteps, noise)
 
-        for t in range(self.training_config.val_timesteps, 0, -self.training_config.val_ddim_skip_steps):
+        for t in range(self.training_config.val_timesteps + 1, 0, -self.training_config.val_ddim_skip_steps):
+            timesteps = torch.full((batch_size,), t, device=x0.device)
             noise_pred = self(xt, timesteps, spacings, guidance)
             _, xt_minus_1 = self.noise_scheduler.remove_noise(
                 xt, noise_pred, timesteps, eta=self.training_config.val_ddim_eta
             )
 
             xt = xt_minus_1
-            timesteps = torch.full((batch_size,), t, device=x0.device)
 
+        assert t == 1, f"t={t} should be 1, but got {t}"
         all_metrics = self.calculate_val_metrics(xt, x0)
 
         # Log
@@ -211,6 +213,7 @@ if __name__ == "__main__":
     from config import get_config
 
     config = get_config()
+    config.input_size = (32, 32, 32)
     config.training.val_timesteps = 1
 
     device = torch.device("cpu")
@@ -220,7 +223,7 @@ if __name__ == "__main__":
 
     sample_input = {
         "image": torch.zeros(1, 1, *config.input_size, device=device),
-        "spacing": torch.zeros(1, 3, device=device),
+        "Spacing": [torch.tensor([0.0])] * 3,
         # "crop_offset": torch.zeros(1, 3, device=device),
     }
     sample_output = autoencoder.process_training_step(sample_input)
