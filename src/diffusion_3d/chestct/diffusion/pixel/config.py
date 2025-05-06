@@ -235,15 +235,15 @@ def get_config(training_input_size=(96, 96, 96)):
             train_batch_size=batch_size // num_train_samples_per_datapoint,
             val_batch_size=batch_size // num_val_samples_per_datapoint,
             test_batch_size=4,
-            train_sample_size=4_800,
+            train_sample_size=6_400,
             sample_balance_cols=["Source", "BodyPart"],
         )
     )
 
     training_config = munchify(
         dict(
-            start_from_checkpoint=None,
-            # start_from_checkpoint=r"/raid3/arjun/checkpoints/adaptive_autoencoder/v69__2025_04_23__epoch155/version_0/checkpoints/last.ckpt",
+            # start_from_checkpoint=None,
+            start_from_checkpoint=r"/raid3/arjun/checkpoints/diffusion_3d/v1__2025_05_02/version_0/checkpoints/last.ckpt",
             #
             max_epochs=1000,
             lr=1e-4,
@@ -256,7 +256,7 @@ def get_config(training_input_size=(96, 96, 96)):
             },
             #
             val_timesteps=200,
-            val_ddim_eta=0.0,
+            val_ddim_eta=0.1,
             val_ddim_skip_steps=20,
             #
             checkpointing_level=0,
@@ -268,7 +268,7 @@ def get_config(training_input_size=(96, 96, 96)):
             #
             accumulate_grad_batches=5,
             log_every_n_steps=1,
-            # gradient_clip_val=5.0,
+            gradient_clip_val=5.0,
         )
     )
 
@@ -278,17 +278,14 @@ def get_config(training_input_size=(96, 96, 96)):
         f"Train batch size: {data_config.train_batch_size}",
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
-        "Base experiment",
-        "Cosine noise scheduler",
-        "Uniform timestep sampling",
-        "Always conditioned on timesteps, spacings",
-        "No gradient clipping",
-        "Using FSDP",
+        "Added gradient clipping to FSDP",
+        "Removed last layer tanh as noise prediction is unbounded",
+        "Fixed val metric calculation",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v1__2025_05_02",
+            task_name="v2__2025_05_05__v1",
             log_on_clearml=True,
             clearml_project="diffusion_3d",
             clearml_tags=clearml_tags,
@@ -304,6 +301,7 @@ def get_config(training_input_size=(96, 96, 96)):
                     "qrnd10.internal.qure.ai",  # First one is master node
                     "qrnd21.l40.sr.internal.qure.ai",
                     "qrnd8.internal.qure.ai",
+                    "qrnd11.internal.qure.ai",
                 ]
             ],
         )

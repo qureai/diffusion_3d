@@ -1,6 +1,6 @@
 import torch
 from arjcode.model import MyLightningModule, freeze_module, freeze_modules, unfreeze_module
-from diffusion_3d.chestct.diffusion.unet.nn import Diffusion3D
+from diffusion_3d.chestct.diffusion.pixel.nn import Diffusion3D
 from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.losses.perceptual import PerceptualLoss
 from monai.metrics import MultiScaleSSIMMetric, PSNRMetric
@@ -187,6 +187,9 @@ class Diffusion3DLightning(MyLightningModule):
 
     def validation_step(self, batch, batch_idx):
         return self.process_validation_step(batch, batch_idx)
+
+    def configure_gradient_clipping(self, optimizer, gradient_clip_val, gradient_clip_algorithm=None):
+        self.trainer.model.clip_grad_norm_(gradient_clip_val, gradient_clip_val)
 
     def on_train_epoch_end(self):
         self.print_log()

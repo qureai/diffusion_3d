@@ -294,7 +294,7 @@ class Diffusion3D(nn.Module):
             out_channels=model_config.in_channels,
             kernel_size=3,
             normalization=None,
-            activation="tanh",
+            activation=None,
         )
 
         if model_config.survival_prob < 1.0:
@@ -302,7 +302,7 @@ class Diffusion3D(nn.Module):
             self.decoder = add_stochastic_depth_dropout(self.decoder, model_config.survival_prob)
 
     def forward(self, x, timesteps, spacings, guidance):
-        time_emb = get_timestep_embeddings_1d(self.model_config.time_channels, timesteps).half()
+        time_emb = get_timestep_embeddings_1d(self.model_config.time_channels, timesteps)
 
         x = self.encoder_mapping(x)
         encodings = self.encoder(x, time_emb, spacings, guidance)

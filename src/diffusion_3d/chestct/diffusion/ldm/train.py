@@ -4,11 +4,12 @@ import lightning as L
 import torch
 from clearml import Task
 from config import get_config
-from diffusion_3d.chestct.diffusion.unet.model import Diffusion3DLightning
+from diffusion_3d.chestct.diffusion.ldm.model import LDM3DLightning
 from diffusion_3d.datasets.ct_rate import CTRATEDataModule
 from hydra.utils import instantiate
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.utilities.model_summary import ModelSummary
 
 torch.set_float32_matmul_precision("medium")
 
@@ -35,7 +36,7 @@ if not config.training.fast_dev_run and config.additional.log_on_clearml:
 
 # Create model and datamodule
 if config.training.start_from_checkpoint is not None:
-    model = Diffusion3DLightning.load_from_checkpoint(
+    model = LDM3DLightning.load_from_checkpoint(
         config.training.start_from_checkpoint,
         model_config=config.model,
         training_config=config.training,
@@ -44,8 +45,13 @@ if config.training.start_from_checkpoint is not None:
     )
     print(f"Started from: {config.training.start_from_checkpoint}")
 else:
-    model = Diffusion3DLightning(config.model, config.training)
+    model = LDM3DLightning(config.model, config.training)
 datamodule = CTRATEDataModule(config.data)
+
+
+# # Print own summary before any sharding
+# summary = ModelSummary(model, max_depth=1)
+# print(summary)
 
 
 # Add model size tags to clearml
@@ -91,7 +97,7 @@ trainer = L.Trainer(
     accumulate_grad_batches=config.training.accumulate_grad_batches if not config.training.fast_dev_run else 1,
     log_every_n_steps=config.training.log_every_n_steps,
     strategy=instantiate(config.training.strategy),
-    # gradient_clip_val=config.training.gradient_clip_val,
+    gradient_clip_val=config.training.gradient_clip_val,
     devices=devices,
     plugins=plugins,
     num_nodes=num_nodes,
