@@ -102,12 +102,14 @@ class LDM3DLightning(MyLightningModule):
         guidance = torch.stack([noise_params_guidance, spacings_guidance, offsets_guidance], dim=0).to(x0)
 
         xt = self.noise_scheduler.add_noise(x0, timesteps, noise)
-        velocity_target = self.noise_scheduler.get_velocity(x0, timesteps, noise)
 
-        velocity_pred = self(xt, noise_params, spacings, offsets, guidance)
+        # target = self.noise_scheduler.get_velocity(x0, timesteps, noise)
+        target = noise
 
-        all_losses = self.calculate_basic_losses(velocity_pred, velocity_target)
-        all_metrics = self.calculate_train_metrics(velocity_pred, velocity_target)
+        pred = self(xt, noise_params, spacings, offsets, guidance)
+
+        all_losses = self.calculate_basic_losses(pred, target)
+        all_metrics = self.calculate_train_metrics(pred, target)
 
         self.calculate_denoiser_loss(all_losses)
 
@@ -193,8 +195,9 @@ class LDM3DLightning(MyLightningModule):
     #         "epoch_log": epoch_log,
     #     }
 
-    # def validation_step(self, batch, batch_idx):
-    #     return self.process_validation_step(batch, batch_idx)
+    def validation_step(self, batch, batch_idx):
+        return
+        # return self.process_validation_step(batch, batch_idx)
 
     # def configure_gradient_clipping(self, optimizer, gradient_clip_val, gradient_clip_algorithm=None):
     #     self.trainer.model.clip_grad_norm_(gradient_clip_val, gradient_clip_val)

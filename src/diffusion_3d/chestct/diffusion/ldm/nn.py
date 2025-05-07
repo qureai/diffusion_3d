@@ -30,7 +30,7 @@ class Conditioning(nn.Module):
                 nn.Linear(out_channels, out_channels),
             )
 
-        self.proj_proj_noise_param = get_embedding_module(out_channels, out_channels)
+        self.proj_noise_param = get_embedding_module(out_channels, out_channels)
         self.proj_spacings = get_embedding_module(3, out_channels)
         self.proj_offset = get_embedding_module(out_channels, out_channels)
 
@@ -48,7 +48,7 @@ class Conditioning(nn.Module):
         # noise_params: (b,)
         noise_param = get_timestep_embeddings_1d(self.out_channels, noise_params)[0]
         # (b, d)
-        noise_param_cond = self.proj_proj_noise_param(noise_param)
+        noise_param_cond = self.proj_noise_param(noise_param)
         # (b, d)
         noise_param_cond = guidance[0, :, None] * noise_param_cond
         # (b, d)

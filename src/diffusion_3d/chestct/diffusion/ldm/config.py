@@ -285,17 +285,13 @@ def get_config(training_input_size=(96, 96, 96)):
         f"Train batch size: {data_config.train_batch_size}",
         f"Checkpointing level: {training_config.checkpointing_level}",
         #
-        "LDM",
-        "Training in MAISI VAE latent space",
-        "Moved to velocity prediction",
-        "Conditioned on sqrt(1-alphas_bar) instead of timesteps",
-        "Conditioned on image location offset",
-        "Added CFG for spacings and offsets",
+        "LDM - MAISI VAE",
+        "Moved back to noise prediction",
     ]
 
     additional_config = munchify(
         dict(
-            task_name="v3__2025_05_06",
+            task_name="v4__2025_05_07",
             log_on_clearml=True,
             clearml_project="diffusion_3d",
             clearml_tags=clearml_tags,
