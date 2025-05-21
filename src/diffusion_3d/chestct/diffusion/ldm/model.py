@@ -81,7 +81,7 @@ class LDM3DLightning(MyLightningModule):
 
     def process_batch(self, batch):
         x0 = self.vae.encode(batch["image"])
-        spacings = torch.stack(batch["Spacing"], dim=1).to(torch.float16)
+        spacings = torch.stack(batch["Spacing"], dim=1).to(x0.dtype)
         offsets = batch["crop_offset"]
         return x0, spacings, offsets
 
@@ -91,7 +91,8 @@ class LDM3DLightning(MyLightningModule):
         batch_size = x0.shape[0]
 
         timesteps = self.timestep_sampler(batch_size).to(x0.device)
-        noise_params = self.noise_scheduler.get_sqrt_one_minus_alphas_cumprod(timesteps)
+        # noise_params = self.noise_scheduler.get_sqrt_one_minus_alpha_bars(timesteps)
+        noise_params = timesteps
         noise = torch.randn_like(x0)
 
         # Build guidance

@@ -365,7 +365,7 @@ if __name__ == "__main__":
     config = get_config()
 
     device = torch.device("cpu")
-    # device = torch.device("cuda:0")
+    device = torch.device("cuda:0")
 
     ldm = LDM3D(config.model, 0).to(device)
     describe_model(ldm)
@@ -377,7 +377,7 @@ if __name__ == "__main__":
     process = psutil.Process()
     initial_mem = process.memory_info().rss  # in bytes
 
-    sample_input = torch.zeros((1, 1, *[d // 4 for d in config.input_size])).to(device)
+    sample_input = torch.zeros((1, 4, *[d // 4 for d in config.input_size])).to(device)
     noise_param = torch.randint(0, config.model.timesteps, (1,)).to(device)  # Dummy noise_param
     spacings = torch.rand((1, 3)).to(device)
     offsets = torch.rand((1, 3)).to(device)
@@ -400,7 +400,8 @@ if __name__ == "__main__":
     print("Input shape:", sample_input.shape)
     print("Output shape:", sample_output.shape)
     print()
-    print(f"GPU: {torch.cuda.max_memory_allocated() / 2**30} GB peak mem used")
+    if device != torch.device("cpu"):
+        print(f"GPU: {torch.cuda.max_memory_allocated(device) / 2**30} GB peak mem used")
     print(f"RAM: {(final_mem - initial_mem) / 2**30} GB peak mem used")
     print(f"Time (forward): {forward_time:.3f} s")
     print(f"Time (backward): {backward_time:.3f} s")
